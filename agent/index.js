@@ -19,13 +19,15 @@ function normalisePhoneForLookup(phone) {
   return '+44' + cleaned; // default UK
 }
 
+const googleAuthOptions = process.env.BIGQUERY_CREDENTIALS_JSON
+  ? { credentials: JSON.parse(process.env.BIGQUERY_CREDENTIALS_JSON) }
+  : { keyFilename: process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json' };
+
 const ai = new GoogleGenAI({
   vertexai: true,
   project: process.env.BIGQUERY_PROJECT_ID || 'yhangry',
   location: process.env.VERTEX_LOCATION || 'us-central1',
-  googleAuthOptions: {
-    keyFilename: process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json',
-  },
+  googleAuthOptions,
 });
 
 async function runAgent(data) {

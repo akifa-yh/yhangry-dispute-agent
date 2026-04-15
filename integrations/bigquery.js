@@ -1,9 +1,17 @@
 import { BigQuery } from '@google-cloud/bigquery';
 
-const bigquery = new BigQuery({
+// Support credentials as either a file path or a JSON env var (for cloud deploys)
+const bigqueryOptions = {
   projectId: process.env.BIGQUERY_PROJECT_ID || 'yhangry',
-  keyFilename: process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json',
-});
+};
+
+if (process.env.BIGQUERY_CREDENTIALS_JSON) {
+  bigqueryOptions.credentials = JSON.parse(process.env.BIGQUERY_CREDENTIALS_JSON);
+} else {
+  bigqueryOptions.keyFilename = process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json';
+}
+
+const bigquery = new BigQuery(bigqueryOptions);
 
 const p = process.env.BIGQUERY_PROJECT_ID || 'yhangry';
 const d = process.env.BIGQUERY_DATASET || 'yhangry_booking';
