@@ -1,7 +1,8 @@
 import dotenv from 'dotenv';
 dotenv.config({ override: true });
 import express from 'express';
-import { App, ExpressReceiver } from '@slack/bolt';
+import pkg from '@slack/bolt';
+const { App, ExpressReceiver } = pkg;
 import { stripe as getStripe } from './integrations/stripe.js';
 import { submitEvidence } from './integrations/stripe.js';
 import { investigateDispute } from './agent/index.js';
