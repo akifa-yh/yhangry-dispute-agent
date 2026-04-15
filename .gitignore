@@ -1,0 +1,5 @@
+node_modules/
+credentials/
+.env
+*.DS_Store
+test-*.js
