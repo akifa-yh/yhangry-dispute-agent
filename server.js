@@ -40,12 +40,13 @@ slackApp.action('approve_dispute', async ({ action, ack, say }) => {
   }
 
   try {
-    // Generate evidence document
+    // Generate evidence PDF
     const docxBuffer = await generateEvidence({
       analysis: state.analysis,
-      dispute: { id: disputeId, amount: state.analysis.dispute_id ? 0 : 0, ...state },
+      dispute: { id: disputeId, amount: state.analysis.amount || 0, ...state },
       booking: state.booking,
       platformMessages: state.messages || [],
+      allContacts: state.all_contacts || [],
     });
 
     // Submit to Stripe
