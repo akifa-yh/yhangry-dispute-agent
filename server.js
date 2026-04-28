@@ -10,10 +10,37 @@ import {
   getDisputeState,
   updateMessage,
   postFollowUp,
+  postError as postSlackError,
 } from './integrations/slack.js';
 import { generateEvidence } from './evidence/generator.js';
 
 const PORT = process.env.PORT || 3000;
+
+// Post unhandled investigation errors to Slack so they never die silently in
+// the Render logs. Wrapped in its own try/catch so a Slack-side failure
+// doesn't escalate into an unhandled rejection.
+async function reportInvestigationError(source, dispute, err) {
+  console.error(`[${source}] Error investigating dispute ${dispute?.id}:`, err);
+  try {
+    const amount = typeof dispute?.amount === 'number'
+      ? `$${(dispute.amount / 100).toFixed(2)}`
+      : 'unknown';
+    const reason = dispute?.network_reason_code || dispute?.reason || 'unknown';
+    const trimmedMsg = (err?.message || String(err)).slice(0, 800);
+    await postSlackError(
+      `Investigation failed before posting recommendation`,
+      {
+        source,
+        dispute_id: dispute?.id || 'unknown',
+        amount,
+        reason,
+        error: trimmedMsg,
+      }
+    );
+  } catch (slackErr) {
+    console.error(`[${source}] Also failed to post error to Slack:`, slackErr?.message || slackErr);
+  }
+}
 
 // --- Slack Bolt with Express ---
 const receiver = new ExpressReceiver({
@@ -136,10 +163,8 @@ app.post(
     const dispute = event.data.object;
     console.log(`[stripe] Received dispute: ${dispute.id}`);
 
-    // Process asynchronously
-    investigateDispute(dispute).catch((err) => {
-      console.error(`[agent] Error investigating dispute ${dispute.id}:`, err);
-    });
+    // Process asynchronously. Errors are surfaced to Slack via the helper.
+    investigateDispute(dispute).catch((err) => reportInvestigationError('webhook', dispute, err));
   }
 );
 
@@ -160,9 +185,7 @@ app.post('/test/dispute', express.json(), async (req, res) => {
     charge: req.body?.charge || 'ch_test',
   };
   res.json({ status: 'investigating', dispute_id: testDispute.id });
-  investigateDispute(testDispute).catch((err) => {
-    console.error(`[test] Error:`, err.message);
-  });
+  investigateDispute(testDispute).catch((err) => reportInvestigationError('test', testDispute, err));
 });
 
 // --- Start ---
