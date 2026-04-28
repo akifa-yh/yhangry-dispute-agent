@@ -46,10 +46,63 @@ CLAIM ANALYSIS — for each customer claim:
 - SUPPORTED: messages or data support the customer
 - UNVERIFIABLE: no evidence either way
 
+EVIDENCE INDEPENDENCE SCORING:
+For every piece of evidence you list in evidence_to_include, classify how
+independent it is from the chef's own self-interested account. Issuers and
+banks discount self-serving evidence — independence matters more than volume.
+
+- HIGH: System-recorded data the chef cannot fabricate.
+  Examples: Aircall call/voicemail timestamps and durations (third-party
+  phone system); chef_submitted_payment_survey = true (timestamped DB
+  event, only created when chef completes the form after the job);
+  is_chef_ready_response / is_chef_on_time_response system fields;
+  GPS check-in data; timestamped photos with EXIF data.
+
+- MEDIUM: Chef ↔ customer interactions where the customer is a party.
+  Examples: Platform messages where the chef states a fact (e.g. "I'm
+  15 mins away") AND the customer responds without disputing it;
+  messages where the customer voluntarily confirms something (e.g.
+  "chef is here", "thanks for tonight"); the documented absence of any
+  customer complaint in the platform thread during/immediately after
+  the event despite an active conversation.
+
+- LOW: Chef's own written account, separate from real-time platform
+  messages. Examples: The chef's after-the-fact email to ops describing
+  the event; the chef's written response to a customer complaint sent
+  days later. These are admissible but weak — they support a narrative
+  but cannot stand alone as proof.
+
+- NEGATIVE: Chef's own account that CORROBORATES the customer's
+  grievance — "own-goal" evidence. Examples: Chef admits in writing to
+  substituting menu items when the customer's claim is "courses were
+  missing"; chef admits to leaving early when the customer's claim is
+  "service was incomplete"; chef confirms a phone-call interruption
+  when the customer's claim is "she was on the phone all night".
+
+CRITICAL RULES FOR INDEPENDENCE:
+1. NEVER place NEGATIVE evidence in evidence_to_include. NEGATIVE items
+   ONLY appear in evidence_weaknesses, with an explanation of which
+   customer claim they corroborate.
+2. NEVER lean on LOW evidence as the primary support for a rebuttal_point
+   that contradicts a customer claim. Pair it with HIGH or MEDIUM
+   evidence, or downgrade evidence_strength.
+3. evidence_strength must reflect the WEAKEST link in the evidence chain
+   for the most heavily disputed claim. If the only evidence on the
+   most-contested claim is LOW, evidence_strength is at most MODERATE.
+   If the only evidence is from the chef themselves and the chef has
+   admitted partial fault, evidence_strength is WEAK.
+
 DECISION RULES:
 - STRONG_COUNTER: NO_COMPLAINT_FOUND or LATE_COMPLAINT + service rendered
-- COUNTER_WITH_CAVEATS: TIMELY_COMPLAINT + service materially rendered but shortfalls exist — counter but don't claim perfect service
-- ESCALATE: chef no-show confirmed; multiple SUPPORTED claims; conflicting signals requiring human judgment; chef attendance UNCONFIRMED with no direct messages from chef on the day
+  + at least one HIGH-independence evidence item supporting attendance
+- COUNTER_WITH_CAVEATS: TIMELY_COMPLAINT + service materially rendered
+  but shortfalls exist; OR strong deadline case but evidence is mostly
+  LOW-independence — counter but don't overclaim
+- ESCALATE: chef no-show confirmed; multiple SUPPORTED claims;
+  conflicting signals requiring human judgment; chef attendance
+  UNCONFIRMED with no direct messages from chef on the day; OR any
+  case where the chef has admitted in writing to facts that
+  corroborate the customer's main claim (NEGATIVE evidence present)
 
 NEVER auto-recommend ACCEPT.
 Always distinguish "no evidence to counter" vs "evidence supports customer."
@@ -78,9 +131,22 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
   "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW",
   "evidence_strength": "STRONG | MODERATE | WEAK",
   "recommendation": "STRONG_COUNTER | COUNTER_WITH_CAVEATS | ESCALATE",
-  "reasoning": "2-4 sentences summarising why",
+  "reasoning": "2-4 sentences summarising why, including a note on the independence quality of the strongest evidence",
   "suggested_rebuttal_points": ["string"],
-  "evidence_to_include": ["string"],
+  "evidence_to_include": [
+    {
+      "evidence": "specific evidence description (e.g. 'Aircall call log: 5 unanswered calls on 2026-04-01')",
+      "independence_score": "HIGH | MEDIUM | LOW",
+      "rationale": "one sentence on why this score"
+    }
+  ],
+  "evidence_weaknesses": [
+    {
+      "weakness": "description of the gap or NEGATIVE evidence item",
+      "affects_claim": "which customer claim this weakness affects (or 'general' if structural)",
+      "severity": "LOW | MEDIUM | HIGH"
+    }
+  ],
   "flags": ["any unusual factors worth human attention"]
 }`;
 
@@ -102,12 +168,27 @@ export function buildUserMessage({
           .join('\n')
       : 'None found across all channels';
 
+  // Format messages with correct sender name and unwrapped timestamp.
+  // - `created_at` from BigQuery is a wrapper { value: 'ISO' } object, so we extract `.value`.
+  // - Both `customer_first_name` and `chef_first_name` are always populated on every row
+  //   (they identify the conversation parties, not the sender), so we pick by sender_role.
+  function senderName(m) {
+    const role = (m.sender_role || '').toLowerCase();
+    if (role === 'chef') return m.chef_first_name || 'Chef';
+    if (role === 'customer') return m.customer_first_name || 'Customer';
+    if (role === 'admin') return 'yhangry system';
+    return 'unknown';
+  }
+  function msgTimestamp(m) {
+    const raw = m.created_at?.value || m.created_at || '';
+    return String(raw);
+  }
   const messagesSection =
     platformMessages.length > 0
       ? platformMessages
           .map(
             (m) =>
-              `[${m.created_at}] ${(m.sender_role || 'unknown').toUpperCase()} (${m.customer_first_name || m.chef_first_name || 'unknown'}): ${m.body || ''}`
+              `[${msgTimestamp(m)}] ${(m.sender_role || 'unknown').toUpperCase()} (${senderName(m)}): ${m.body || ''}`
           )
           .join('\n')
       : 'No platform messages found';

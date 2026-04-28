@@ -13,6 +13,41 @@ function checkPageSpace(doc, needed = 100) {
   if (doc.y > 720 - needed) doc.addPage();
 }
 
+// Backwards-compat: handle old string-form evidence entries
+function normaliseEvidence(item) {
+  if (typeof item === 'string') {
+    return { evidence: item, independence_score: null, rationale: null };
+  }
+  return {
+    evidence: item.evidence || '',
+    independence_score: item.independence_score || null,
+    rationale: item.rationale || null,
+  };
+}
+
+const INDEPENDENCE_BADGE = {
+  HIGH: { label: 'HIGH', fill: '#2E7D32', text: '#FFFFFF' },     // green
+  MEDIUM: { label: 'MEDIUM', fill: '#1565C0', text: '#FFFFFF' }, // blue
+  LOW: { label: 'LOW', fill: '#F9A825', text: '#000000' },       // amber
+};
+
+const SEVERITY_BADGE = {
+  LOW: { label: 'LOW', fill: '#9E9E9E', text: '#FFFFFF' },
+  MEDIUM: { label: 'MEDIUM', fill: '#F57C00', text: '#FFFFFF' },
+  HIGH: { label: 'HIGH', fill: '#D32F2F', text: '#FFFFFF' },
+};
+
+function drawBadge(doc, x, y, badge) {
+  if (!badge) return 0;
+  const padding = 4;
+  doc.fontSize(7).font('Helvetica-Bold');
+  const w = doc.widthOfString(badge.label) + padding * 2;
+  doc.roundedRect(x, y, w, 11, 2).fill(badge.fill);
+  doc.fillColor(badge.text).text(badge.label, x + padding, y + 2);
+  doc.fillColor('#000000');
+  return w;
+}
+
 function sectionHeading(doc, text, subtitle) {
   checkPageSpace(doc, 60);
   doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000').text(text, 50);
@@ -23,11 +58,31 @@ function sectionHeading(doc, text, subtitle) {
   doc.moveDown(0.5);
 }
 
+function formatMessageTimestamp(raw) {
+  // BigQuery timestamps come back as { value: 'ISO string' } objects
+  const s = raw?.value || raw;
+  if (!s) return '';
+  // Render as 'YYYY-MM-DD HH:MM' for compactness
+  const str = String(s);
+  return str.includes('T') ? str.replace('T', ' ').slice(0, 16) : str.slice(0, 16);
+}
+
+function senderDisplayName(message) {
+  // Both customer_first_name and chef_first_name are always populated
+  // (they identify conversation parties, not who sent the message).
+  // Pick based on sender_role.
+  const role = (message.sender_role || '').toLowerCase();
+  if (role === 'chef') return message.chef_first_name || 'Chef';
+  if (role === 'customer') return message.customer_first_name || 'Customer';
+  if (role === 'admin') return 'yhangry system';
+  return 'unknown';
+}
+
 function drawChatBubble(doc, message) {
   const sender = (message.sender_role || 'unknown').toUpperCase();
-  const name = message.customer_first_name || message.chef_first_name || 'unknown';
+  const name = senderDisplayName(message);
   const body = (message.body || '').slice(0, 400);
-  const time = message.created_at;
+  const time = formatMessageTimestamp(message.created_at);
 
   const isChef = sender === 'CHEF';
   const isAdmin = sender === 'ADMIN';
@@ -212,14 +267,64 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
     drawCallLogTable(doc, allContacts);
   }
 
-  // ===== Evidence References =====
-  if (analysis.evidence_to_include && analysis.evidence_to_include.length > 0) {
+  // ===== Evidence to Include (with independence scores) =====
+  const evidenceItems = (analysis.evidence_to_include || []).map(normaliseEvidence);
+  if (evidenceItems.length > 0) {
     doc.moveDown(1);
-    sectionHeading(doc, 'Evidence References');
-    doc.fontSize(9).font('Helvetica');
-    analysis.evidence_to_include.forEach((ref, i) => {
-      doc.text(`${i + 1}. ${ref}`, 50, doc.y, { width: 490 });
-      doc.moveDown(0.2);
+    sectionHeading(doc, 'Evidence to Include',
+      'Independence-scored. HIGH = system-recorded, MEDIUM = customer-party messages, LOW = chef self-report.');
+
+    evidenceItems.forEach((item, i) => {
+      checkPageSpace(doc, 50);
+      const rowY = doc.y;
+
+      // Number + badge
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
+        .text(`${i + 1}.`, 50, rowY, { continued: false, width: 18 });
+
+      const badge = INDEPENDENCE_BADGE[item.independence_score];
+      const badgeWidth = badge ? drawBadge(doc, 68, rowY + 1, badge) : 0;
+      const textX = 68 + (badgeWidth ? badgeWidth + 6 : 0);
+
+      doc.fontSize(9).font('Helvetica').fillColor('#000000')
+        .text(item.evidence, textX, rowY, { width: 545 - textX });
+
+      if (item.rationale) {
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
+          .text(item.rationale, 68, doc.y + 1, { width: 477 });
+        doc.fillColor('#000000');
+      }
+      doc.moveDown(0.4);
+    });
+  }
+
+  // ===== Evidence Weaknesses & Gaps =====
+  const weaknesses = analysis.evidence_weaknesses || [];
+  if (weaknesses.length > 0) {
+    doc.moveDown(0.5);
+    sectionHeading(doc, 'Evidence Weaknesses & Gaps',
+      'Items NOT to include in submitted evidence. Flagged so reviewer is aware of vulnerabilities in our case.');
+
+    weaknesses.forEach((w, i) => {
+      checkPageSpace(doc, 50);
+      const rowY = doc.y;
+
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
+        .text(`${i + 1}.`, 50, rowY, { continued: false, width: 18 });
+
+      const badge = SEVERITY_BADGE[w.severity];
+      const badgeWidth = badge ? drawBadge(doc, 68, rowY + 1, badge) : 0;
+      const textX = 68 + (badgeWidth ? badgeWidth + 6 : 0);
+
+      doc.fontSize(9).font('Helvetica').fillColor('#000000')
+        .text(w.weakness || '', textX, rowY, { width: 545 - textX });
+
+      if (w.affects_claim) {
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
+          .text(`Affects claim: ${w.affects_claim}`, 68, doc.y + 1, { width: 477 });
+        doc.fillColor('#000000');
+      }
+      doc.moveDown(0.4);
     });
   }
 

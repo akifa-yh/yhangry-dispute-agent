@@ -17,6 +17,30 @@ const ATTENDANCE_EMOJI = {
   NO_SHOW: ':rotating_light:',
 };
 
+const INDEPENDENCE_EMOJI = {
+  HIGH: ':large_green_circle:',
+  MEDIUM: ':large_blue_circle:',
+  LOW: ':large_yellow_circle:',
+};
+
+const SEVERITY_EMOJI = {
+  LOW: ':grey_exclamation:',
+  MEDIUM: ':warning:',
+  HIGH: ':rotating_light:',
+};
+
+// Backwards-compat: handle old string-form evidence_to_include entries
+function normaliseEvidence(item) {
+  if (typeof item === 'string') {
+    return { evidence: item, independence_score: null, rationale: null };
+  }
+  return {
+    evidence: item.evidence || '',
+    independence_score: item.independence_score || null,
+    rationale: item.rationale || null,
+  };
+}
+
 function formatDeadline(analysis) {
   const { deadline_status, earliest_contact } = analysis;
   const ec = earliest_contact || {};
@@ -50,6 +74,28 @@ export function formatSlackMessage(analysis, dispute, booking) {
 
   const rebuttalLines = (analysis.suggested_rebuttal_points || [])
     .map((r, i) => `${i + 1}. ${r}`)
+    .join('\n');
+
+  // Evidence to include \u2014 with independence scores
+  const evidenceItems = (analysis.evidence_to_include || []).map(normaliseEvidence);
+  const evidenceLines = evidenceItems
+    .map((e) => {
+      const emoji = INDEPENDENCE_EMOJI[e.independence_score] || ':grey_question:';
+      const scoreTag = e.independence_score ? `[${e.independence_score}]` : '[unscored]';
+      const rationale = e.rationale ? ` _\u2014 ${e.rationale}_` : '';
+      return `${emoji} ${scoreTag} ${e.evidence}${rationale}`;
+    })
+    .join('\n');
+
+  // Evidence weaknesses \u2014 surface NEGATIVE items and structural gaps
+  const weaknesses = analysis.evidence_weaknesses || [];
+  const weaknessLines = weaknesses
+    .map((w) => {
+      const emoji = SEVERITY_EMOJI[w.severity] || ':warning:';
+      const sevTag = w.severity ? `[${w.severity}]` : '';
+      const claimRef = w.affects_claim ? ` \u2014 affects: _${w.affects_claim}_` : '';
+      return `${emoji} ${sevTag} ${w.weakness}${claimRef}`;
+    })
     .join('\n');
 
   const flagsBlock =
@@ -108,6 +154,24 @@ export function formatSlackMessage(analysis, dispute, booking) {
         text: `*Rebuttal points:*\n${rebuttalLines || 'None'}`,
       },
     },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Evidence to include* _(independence-scored)_:\n${evidenceLines || '_No evidence items listed_'}`,
+      },
+    },
+    ...(weaknessLines
+      ? [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Evidence weaknesses & gaps* _(do NOT submit these as supporting evidence)_:\n${weaknessLines}`,
+            },
+          },
+        ]
+      : []),
     {
       type: 'section',
       text: {

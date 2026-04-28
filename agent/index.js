@@ -38,7 +38,7 @@ async function runAgent(data) {
     contents: userMessage,
     config: {
       systemInstruction: SYSTEM_PROMPT,
-      maxOutputTokens: 4096,
+      maxOutputTokens: 8192,
       temperature: 0.2,
       responseMimeType: 'application/json',
     },
