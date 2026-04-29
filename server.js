@@ -48,10 +48,17 @@ async function reportInvestigationError(source, dispute, err) {
 }
 
 // --- Slack Bolt with Express ---
+//
+// processBeforeResponse is INTENTIONALLY false (the default). With true,
+// Bolt holds the HTTP response until the handler returns — that's the
+// right mode for serverless platforms like Lambda where the function
+// shuts down on response, but it's WRONG for our long-running Render
+// server. With true, `await ack()` won't actually close the modal until
+// the entire handler finishes, so users see the narrative-paste modal
+// hang for the full 30-60s of Gemini analysis.
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   endpoints: '/slack/events', // Slack events endpoint
-  processBeforeResponse: true,
 });
 
 const slackApp = new App({
