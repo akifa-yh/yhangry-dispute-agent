@@ -9,9 +9,18 @@ IMPORTANT RULES:
 DEADLINE RULE:
 yhangry's T&C requires customers to lodge complaints by 12:00 PM local time on the day following their event.
 
-- NO_COMPLAINT_FOUND: no contact on any channel → strong counter
-- LATE_COMPLAINT: earliest contact after deadline → strong counter
-- TIMELY_COMPLAINT: earliest contact at or before deadline → neutral, evaluate substance of the case
+The COMPLAINT WINDOW runs from event-end (typically late evening on the meal
+date — chef arrives ~2hrs pre-service, service runs ~3hrs, then cleanup, so
+events conclude around midnight local) through to 12:00 PM local the next day.
+Pre-event-end contacts are NOT complaints — they're prep/booking/in-flight
+questions that the agent's contact search window already filters out, so any
+contacts you see in ALL CONTACT ATTEMPTS are post-event candidates only.
+
+- NO_COMPLAINT_FOUND: no post-event contact on any channel → strong counter
+- LATE_COMPLAINT: earliest post-event contact after the 12 PM next-day
+  deadline → strong counter (deadline argument wins)
+- TIMELY_COMPLAINT: earliest post-event contact at or before the deadline →
+  neutral, evaluate substance of the case via narrative claim mapping
 
 Voicemails count. Automated replies count.
 

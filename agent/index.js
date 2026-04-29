@@ -114,18 +114,25 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     eventDateStr
   );
 
-  // Step 3: Contact-search window. Start at noon local on the event date —
-  // earlier same-day contacts are almost always prep/booking questions
-  // rather than complaints (the event hasn't happened yet), and customers
-  // verbally raise issues with the on-site chef during the event itself
-  // rather than calling yhangry support pre-event. This prevents pre-event
-  // noise (e.g. a 1:30 AM voicemail on the morning of the event) from being
-  // mis-tagged as the "first complaint contact" in deadline analysis.
+  // Step 3: Contact-search window. The yhangry complaint window starts AFTER
+  // the event ends (per yhangry T&Cs). A typical dinner booking runs:
+  //   - chef arrives ~2 hours before service start (~6 PM for an 8 PM dinner)
+  //   - service runs ~3 hours
+  //   - cleanup + chef departure pushes total event end to ~midnight local
+  // So contacts from before the event concluded are essentially always
+  // prep/booking/in-flight questions, not complaints — customers raise
+  // event-time issues IN PERSON to the on-site chef, not via yhangry support.
+  // We use end-of-event-day local (= start of the day after the meal date in
+  // the customer's timezone, i.e. midnight) as the floor. This conservatively
+  // captures the genuine complaint window (post-event through 12 PM next-day
+  // deadline + after) and excludes the noisy pre-event same-day contacts that
+  // would otherwise be mis-tagged as "first complaint contact".
   const searchWindowStart = DateTime.fromISO(eventDateStr, { zone: timezone })
-    .set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+    .plus({ days: 1 })
+    .startOf('day');
   const eventDateUnix = Math.floor(searchWindowStart.toMillis() / 1000);
   const eventDateIso = searchWindowStart.toISO();
-  console.log(`[agent] Contact search window: from ${eventDateIso} (${timezone})`);
+  console.log(`[agent] Contact search window: from ${eventDateIso} (${timezone}) — i.e. post-event-end`);
 
   // Step 4: Normalise phone for external lookups (postcode disambiguates country)
   const customerPhone = normalisePhoneForLookup(booking.customer_phone, booking.address_postcode);
