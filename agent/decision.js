@@ -294,9 +294,23 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
 
   blocks.push({ type: 'divider' });
 
-  // Action buttons. "Add Customer Narrative" is the new fourth button — placed
-  // first so it's the most prominent next-step affordance when narrative is
-  // missing. Approve/Escalate/Dismiss follow.
+  // Action buttons. We encode the full dispute payload (id, payment_intent,
+  // amount, reason, network_reason_code) into each button's `value` field as
+  // compact JSON. This lets the action handlers recover the dispute object
+  // without needing the in-memory disputeState Map — critical because Render
+  // free tier idle-sleeps wipe in-memory state, so any button click made >50s
+  // after the message was posted would otherwise fail. Compact key names keep
+  // us well inside Slack's 2000-char value limit.
+  const buttonPayload = JSON.stringify({
+    id: dispute.id,
+    pi: dispute.payment_intent || dispute.charge,
+    amt: dispute.amount,
+    r: dispute.reason,
+    nrc: dispute.network_reason_code || null,
+  });
+
+  // "Add Customer Narrative" is placed first so it's the most prominent
+  // next-step affordance when narrative is missing.
   const narrativeButtonText = narrativeProvided
     ? 'Update Customer Narrative'
     : 'Add Customer Narrative';
@@ -308,30 +322,54 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
         type: 'button',
         text: { type: 'plain_text', text: narrativeButtonText },
         action_id: 'add_narrative',
-        value: dispute.id,
+        value: buttonPayload,
       },
       {
         type: 'button',
         text: { type: 'plain_text', text: 'Approve & Generate Evidence' },
         style: 'primary',
         action_id: 'approve_dispute',
-        value: dispute.id,
+        value: buttonPayload,
       },
       {
         type: 'button',
         text: { type: 'plain_text', text: 'Escalate for Review' },
         action_id: 'escalate_dispute',
-        value: dispute.id,
+        value: buttonPayload,
       },
       {
         type: 'button',
         text: { type: 'plain_text', text: 'Dismiss' },
         style: 'danger',
         action_id: 'dismiss_dispute',
-        value: dispute.id,
+        value: buttonPayload,
       },
     ],
   });
 
   return { blocks };
+}
+
+/**
+ * Decode a button value back into a dispute object. Handles both the new
+ * JSON-encoded payload and the legacy raw-dispute-id format (for messages
+ * posted before the encoding change).
+ */
+export function decodeButtonValue(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && parsed.id) {
+      return {
+        id: parsed.id,
+        payment_intent: parsed.pi,
+        amount: parsed.amt,
+        reason: parsed.r,
+        network_reason_code: parsed.nrc,
+      };
+    }
+  } catch {
+    // Not JSON — assume legacy format where value was the dispute id directly
+  }
+  return { id: value, payment_intent: null, amount: null, reason: null, network_reason_code: null };
 }

@@ -31,15 +31,35 @@ export async function searchContact(email) {
       const contacts = res.data?.data || [];
       allContacts.push(...contacts);
 
-      // Check if we found the contact — email may be in first_name field or name might match
+      // Check if we found the contact — email may be in first_name field or name might match.
+      // CRITICAL: We must NOT use `emailLower.includes(fn)` — every string includes the empty
+      // string, so any contact with an empty first_name would falsely match. (This caused
+      // the Tyler dispute to "find" a Conduit contact named Chris at christaylor3000@hotmail.com.)
       const emailLower = email.toLowerCase();
-      const namePart = email.split('@')[0].toLowerCase().replace(/[._]/g, ' ');
+      const localPart = email.split('@')[0].toLowerCase();
       const match = contacts.find((c) => {
-        const fn = (c.first_name || '').toLowerCase();
-        const ln = (c.last_name || '').toLowerCase();
-        return fn === emailLower || fn.includes(emailLower)
-          || (fn + ' ' + ln).includes(namePart)
-          || emailLower.includes(fn);
+        const fn = (c.first_name || '').trim().toLowerCase();
+        const ln = (c.last_name || '').trim().toLowerCase();
+
+        // Skip empty contacts — can't reliably match them
+        if (!fn && !ln) return false;
+
+        // Email-as-first_name (Conduit pattern for inbound emails from unknown contacts)
+        if (fn === emailLower) return true;
+
+        // Email contained somewhere in name fields (rare, but possible)
+        if (fn.includes(emailLower) || ln.includes(emailLower)) return true;
+
+        // Local-part heuristic. Local part of `tnader@mainstaymedical.com` is `tnader`.
+        // We match if it appears as a substring in fn or ln. Require localPart to be at
+        // least 4 chars to avoid false-positive matches on common short names like "tom"
+        // or "ana" against unrelated contacts. Use word-boundary-ish check via space-pad.
+        if (localPart.length >= 4) {
+          const fullName = ` ${fn} ${ln} `;
+          if (fullName.includes(localPart)) return true;
+        }
+
+        return false;
       });
 
       if (match) {

@@ -13,7 +13,10 @@ import {
   postError as postSlackError,
   openNarrativeModal,
   updateDisputeReview,
+  updateDisputeReviewByCoords,
+  decodeModalMetadata,
 } from './integrations/slack.js';
+import { decodeButtonValue } from './agent/decision.js';
 import { generateEvidence } from './evidence/generator.js';
 
 const PORT = process.env.PORT || 3000;
@@ -58,66 +61,93 @@ const slackApp = new App({
 
 // --- Slack button handlers ---
 
-slackApp.action('approve_dispute', async ({ action, ack, say }) => {
-  await ack();
-  const disputeId = action.value;
-  const state = getDisputeState(disputeId);
+// Helper to extract the dispute and the original message coordinates from
+// any action-button click. Both come from the Slack body so we never need
+// the in-memory state to recover them.
+function actionContext(action, body) {
+  const dispute = decodeButtonValue(action.value);
+  const messageTs = body.message?.ts || body.container?.message_ts;
+  // For ephemeral fallbacks we also stash the channel id (Slack provides
+  // it under different paths depending on the action surface).
+  const channelId = body.channel?.id || body.container?.channel_id || process.env.SLACK_CHANNEL_ID;
+  return { dispute, messageTs, channelId };
+}
 
-  if (!state) {
-    await say(`Could not find state for dispute ${disputeId}`);
+slackApp.action('approve_dispute', async ({ action, ack, body }) => {
+  await ack();
+  const { dispute, messageTs } = actionContext(action, body);
+  if (!dispute?.id) {
+    console.error('[server] approve_dispute: bad button payload', action.value);
     return;
   }
 
+  // Try in-memory state first; if missing (Render idle-sleep wiped it),
+  // re-run the investigation from scratch so we have analysis + booking +
+  // messages + contacts to feed into evidence generation.
+  let state = getDisputeState(dispute.id);
+  if (!state) {
+    console.log(`[server] approve_dispute: state miss for ${dispute.id}, re-analysing from button payload`);
+    try {
+      const result = await analyseDispute(dispute);
+      if (!result.booking) throw new Error(`Booking lookup failed for ${dispute.payment_intent}`);
+      state = {
+        message_ts: messageTs,
+        dispute,
+        analysis: result.analysis,
+        booking: result.booking,
+        all_contacts: result.allContacts,
+        messages: result.messages,
+        narrative: null,
+      };
+    } catch (err) {
+      console.error(`[server] approve_dispute recovery failed for ${dispute.id}:`, err);
+      if (messageTs) await postFollowUp(messageTs, `:x: Couldn't re-analyse dispute on approve: ${err.message}`);
+      return;
+    }
+  }
+
   try {
-    // Generate evidence PDF
     const docxBuffer = await generateEvidence({
       analysis: state.analysis,
-      dispute: { id: disputeId, amount: state.analysis.amount || 0, ...state },
+      dispute,
       booking: state.booking,
       platformMessages: state.messages || [],
       allContacts: state.all_contacts || [],
     });
 
-    // Submit to Stripe
-    await submitEvidence(disputeId, state.analysis, state.booking, docxBuffer);
+    await submitEvidence(dispute.id, state.analysis, state.booking, docxBuffer);
 
-    // Update Slack message
     const ts = new Date().toISOString();
-    await updateMessage(state.message_ts, `✅ Evidence submitted to Stripe at ${ts}`);
+    await updateMessage(messageTs || state.message_ts, `✅ Evidence submitted to Stripe at ${ts}`);
   } catch (err) {
-    console.error(`[server] Error approving dispute ${disputeId}:`, err);
-    await postFollowUp(
-      state.message_ts,
-      `:x: Error submitting evidence: ${err.message}`
-    );
+    console.error(`[server] Error approving dispute ${dispute.id}:`, err);
+    if (messageTs || state.message_ts) {
+      await postFollowUp(messageTs || state.message_ts, `:x: Error submitting evidence: ${err.message}`);
+    }
   }
 });
 
-slackApp.action('escalate_dispute', async ({ action, ack }) => {
+slackApp.action('escalate_dispute', async ({ action, ack, body }) => {
   await ack();
-  const disputeId = action.value;
-  const state = getDisputeState(disputeId);
-
-  if (!state) return;
+  const { dispute, messageTs } = actionContext(action, body);
+  if (!dispute?.id || !messageTs) return;
 
   const ts = new Date().toISOString();
-  await updateMessage(state.message_ts, `🔴 Escalated for manual review at ${ts}`);
+  await updateMessage(messageTs, `🔴 Escalated for manual review at ${ts}`);
   await postFollowUp(
-    state.message_ts,
-    `<!here> This dispute needs manual review — ${disputeId}`
+    messageTs,
+    `<!here> This dispute needs manual review — ${dispute.id}`
   );
 });
 
-slackApp.action('dismiss_dispute', async ({ action, ack }) => {
+slackApp.action('dismiss_dispute', async ({ action, ack, body }) => {
   await ack();
-  const disputeId = action.value;
-  const state = getDisputeState(disputeId);
-
-  if (!state) return;
+  const { dispute, messageTs } = actionContext(action, body);
+  if (!dispute?.id || !messageTs) return;
 
   const ts = new Date().toISOString();
-  await updateMessage(state.message_ts, `Dismissed at ${ts}`);
-  console.log(`[server] Dispute ${disputeId} dismissed`);
+  await updateMessage(messageTs, `Dismissed at ${ts}`);
+  console.log(`[server] Dispute ${dispute.id} dismissed`);
 });
 
 // --- Customer narrative flow ---
@@ -132,33 +162,35 @@ slackApp.action('dismiss_dispute', async ({ action, ack }) => {
 
 slackApp.action('add_narrative', async ({ action, ack, body, client }) => {
   await ack();
-  const disputeId = action.value;
-  const state = getDisputeState(disputeId);
 
-  if (!state) {
-    // State was wiped (e.g. Render redeploy since the message was posted).
-    // Tell the user via an ephemeral message rather than failing silently.
-    await client.chat.postEphemeral({
-      channel: body.channel?.id || process.env.SLACK_CHANNEL_ID,
-      user: body.user?.id,
-      text: `:warning: Can't find state for dispute ${disputeId} — the agent may have been redeployed since this message was posted. Re-trigger the dispute via the Stripe webhook (or /test/dispute) and try again.`,
-    });
+  // Decode the dispute payload from the button's value field. This makes the
+  // handler resilient to in-memory state loss (Render free-tier idle-sleep
+  // wipes state every ~50s of inactivity).
+  const dispute = decodeButtonValue(action.value);
+  if (!dispute?.id) {
+    console.error('[server] add_narrative: failed to decode button value', action.value);
     return;
   }
 
+  // Best-effort: pull the customer name from in-memory state if it still
+  // exists, so the modal copy can personalise. If state is gone, fall back
+  // to a generic prompt.
+  const state = getDisputeState(dispute.id);
   const customerName =
-    state.booking?.first_name && state.booking?.last_name
+    state?.booking?.first_name && state?.booking?.last_name
       ? `${state.booking.first_name} ${state.booking.last_name}`
       : null;
 
   try {
     await openNarrativeModal({
       triggerId: body.trigger_id,
-      disputeId,
+      dispute,
+      channelId: body.channel?.id || body.container?.channel_id || process.env.SLACK_CHANNEL_ID,
+      messageTs: body.message?.ts || body.container?.message_ts,
       customerName,
     });
   } catch (err) {
-    console.error(`[server] Failed to open narrative modal for ${disputeId}:`, err);
+    console.error(`[server] Failed to open narrative modal for ${dispute.id}:`, err);
   }
 });
 
@@ -166,25 +198,24 @@ slackApp.view('add_narrative_submitted', async ({ ack, body, view }) => {
   // Acknowledge the modal submission immediately so Slack closes it.
   await ack();
 
-  const disputeId = view.private_metadata;
-  const narrative = view.state.values?.narrative_block?.narrative_input?.value || '';
-
-  console.log(
-    `[server] Narrative submitted for ${disputeId} (${narrative.length} chars) by user ${body.user?.id}`
-  );
-
-  const state = getDisputeState(disputeId);
-  if (!state) {
-    console.error(`[server] No state for dispute ${disputeId} when handling narrative submission`);
-    await postSlackError(
-      `Lost state while processing customer narrative — please re-trigger the dispute`,
-      { dispute_id: disputeId }
-    );
+  // The dispute payload + message coordinates were encoded into private_metadata
+  // when the modal was opened. We use these directly instead of relying on
+  // in-memory state (which Render's idle-sleep can wipe).
+  const meta = decodeModalMetadata(view.private_metadata);
+  if (!meta?.dispute?.id) {
+    console.error('[server] view submission: failed to decode private_metadata', view.private_metadata);
     return;
   }
 
+  const { dispute, channelId, messageTs } = meta;
+  const narrative = view.state.values?.narrative_block?.narrative_input?.value || '';
+
+  console.log(
+    `[server] Narrative submitted for ${dispute.id} (${narrative.length} chars) by user ${body.user?.id}`
+  );
+
   if (!narrative.trim()) {
-    console.warn(`[server] Empty narrative submitted for ${disputeId} — skipping re-analysis`);
+    console.warn(`[server] Empty narrative submitted for ${dispute.id} — skipping re-analysis`);
     return;
   }
 
@@ -193,17 +224,18 @@ slackApp.view('add_narrative_submitted', async ({ ack, body, view }) => {
   // contacts and platform messages, and Gemini will now produce
   // customer_claims, claim_analysis and unaddressed_claims.
   try {
-    const result = await analyseDispute(state.dispute, { narrative });
+    const result = await analyseDispute(dispute, { narrative });
     if (!result.booking) {
       throw new Error(
-        `Booking lookup failed during re-analysis for payment_id: ${result.paymentId}`
+        `Booking lookup failed during re-analysis for payment_id: ${dispute.payment_intent}`
       );
     }
 
-    await updateDisputeReview({
-      disputeId,
+    await updateDisputeReviewByCoords({
+      channelId,
+      messageTs,
       analysis: result.analysis,
-      dispute: state.dispute,
+      dispute,
       booking: result.booking,
       allContacts: result.allContacts,
       messages: result.messages,
@@ -211,15 +243,15 @@ slackApp.view('add_narrative_submitted', async ({ ack, body, view }) => {
     });
 
     console.log(
-      `[server] Re-analysed and updated ${disputeId} with narrative (${result.analysis.customer_claims?.length || 0} claims extracted)`
+      `[server] Re-analysed and updated ${dispute.id} with narrative (${result.analysis.customer_claims?.length || 0} claims extracted)`
     );
   } catch (err) {
-    console.error(`[server] Narrative re-analysis failed for ${disputeId}:`, err);
+    console.error(`[server] Narrative re-analysis failed for ${dispute.id}:`, err);
     try {
       await postSlackError(
         `Re-analysis with customer narrative failed`,
         {
-          dispute_id: disputeId,
+          dispute_id: dispute.id,
           error: (err?.message || String(err)).slice(0, 800),
         }
       );
