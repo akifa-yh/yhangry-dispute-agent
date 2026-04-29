@@ -54,7 +54,9 @@ async function runAgent(data) {
     contents: userMessage,
     config: {
       systemInstruction: SYSTEM_PROMPT,
-      maxOutputTokens: 8192,
+      // Bumped to 16384 to accommodate customer_claims + unaddressed_claims
+      // when a long VROL narrative is parsed (multiple claims with rationales).
+      maxOutputTokens: 16384,
       temperature: 0.2,
       responseMimeType: 'application/json',
     },
@@ -77,10 +79,19 @@ async function runAgent(data) {
  * production investigate path and the local test harness so they execute
  * identical code.
  *
- * Returns { booking, deadlineIso, timezone, allContacts, messages, analysis }
- * or null if the booking can't be found (caller decides how to surface that).
+ * @param {object} dispute - Stripe dispute object (id, amount, reason, payment_intent, ...)
+ * @param {object} [options]
+ * @param {string} [options.narrative] - Customer narrative text (typically pasted from
+ *   the VROL questionnaire by ops via the Slack 'Add Customer Narrative' button).
+ *   When present, the agent parses claims and maps evidence per the prompt's
+ *   "Customer Claim Parsing" rules. When absent, it produces a provisional
+ *   recommendation based on deadline + attendance + evidence.
+ *
+ * Returns { booking, deadlineIso, timezone, allContacts, messages, analysis,
+ *   paymentId } — booking will be null if the lookup failed (caller decides
+ *   how to surface that).
  */
-export async function analyseDispute(dispute) {
+export async function analyseDispute(dispute, { narrative = null } = {}) {
   const disputeId = dispute.id;
   const paymentId = dispute.payment_intent || dispute.charge;
 
@@ -143,6 +154,9 @@ export async function analyseDispute(dispute) {
 
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
+  if (narrative) {
+    console.log(`[agent] Re-analysing with customer narrative (${narrative.length} chars)`);
+  }
   const analysis = await runAgent({
     dispute,
     booking,
@@ -151,9 +165,10 @@ export async function analyseDispute(dispute) {
     earliestContact,
     allContacts,
     platformMessages: messages,
+    narrative,
   });
 
-  console.log(`[agent] Gemini recommendation: ${analysis.recommendation}`);
+  console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);
 
   return { booking, deadlineIso, timezone, allContacts, messages, analysis };
 }

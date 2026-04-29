@@ -199,29 +199,84 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
 
   doc.y = boxY + boxHeight + 15;
 
-  // ===== Claim Analysis =====
-  sectionHeading(doc, 'Claim Analysis');
-  doc.fontSize(9).font('Helvetica');
+  // Lookup map for resolving claim_id → claim text in claim_analysis & weaknesses
+  const customerClaims = analysis.customer_claims || [];
+  const claimsById = Object.fromEntries(customerClaims.map((c) => [c.id, c]));
+  const narrativeProvided = analysis.narrative_provided === true;
 
+  // ===== Customer Claims (Extracted from VROL) =====
+  // Only renders if narrative was provided. Pre-narrative analyses have an
+  // empty customer_claims array and skip this entire section.
+  if (narrativeProvided && customerClaims.length > 0) {
+    sectionHeading(doc, `Customer Claims (${customerClaims.length})`,
+      'Extracted from the customer\'s VROL questionnaire narrative');
+    doc.fontSize(9).font('Helvetica');
+
+    customerClaims.forEach((c, i) => {
+      checkPageSpace(doc, 40);
+      const num = i + 1;
+      const cat = c.category ? ` [${c.category}]` : '';
+      doc.font('Helvetica-Bold').text(`${num}.${cat} `, 50, doc.y, { continued: true });
+      doc.font('Helvetica').text(c.claim || '', { width: 490 });
+      doc.moveDown(0.4);
+    });
+  }
+
+  // ===== Claim Analysis (per-claim evidence mapping) =====
   if (analysis.claim_analysis && analysis.claim_analysis.length > 0) {
-    for (const claim of analysis.claim_analysis) {
-      checkPageSpace(doc, 50);
-      const statusColor = claim.status === 'CONTRADICTED' ? '#D32F2F'
-        : claim.status === 'SUPPORTED' ? '#F57C00' : '#757575';
+    sectionHeading(doc, 'Claim Analysis',
+      'Each customer claim mapped to the evidence we have (or do not have)');
+    doc.fontSize(9).font('Helvetica');
+
+    for (const ca of analysis.claim_analysis) {
+      checkPageSpace(doc, 60);
+      const statusColor = ca.status === 'CONTRADICTED' ? '#D32F2F'
+        : ca.status === 'SUPPORTED' ? '#F57C00' : '#757575';
 
       doc.roundedRect(50, doc.y, 495, 12, 2).fill(statusColor);
       doc.fontSize(8).font('Helvetica-Bold').fillColor('#FFFFFF')
-        .text(` ${claim.status}`, 55, doc.y - 10);
+        .text(` ${ca.status}`, 55, doc.y - 10);
       doc.fillColor('#000000');
 
+      // Resolve claim text from customer_claims by id; fall back to claim_id
+      const claim = claimsById[ca.claim_id];
+      const claimText = claim?.claim || ca.claim_id || '(claim text missing)';
+
       doc.fontSize(9).font('Helvetica-Oblique')
-        .text(`"${claim.claim}"`, 50, doc.y + 4, { width: 490 });
+        .text(`"${claimText}"`, 50, doc.y + 4, { width: 490 });
+      const indepTag = ca.evidence_independence ? ` [${ca.evidence_independence}]` : '';
       doc.font('Helvetica')
-        .text(`Evidence: ${claim.evidence}`, 50, doc.y, { width: 490 });
+        .text(`Evidence${indepTag}: ${ca.evidence || 'no evidence available'}`, 50, doc.y, { width: 490 });
       doc.moveDown(0.5);
     }
+  } else if (narrativeProvided) {
+    sectionHeading(doc, 'Claim Analysis');
+    doc.fontSize(9).font('Helvetica').text('No claims extracted from narrative.', 50, doc.y, { width: 490 });
   } else {
-    doc.text('No customer claims analysed.');
+    sectionHeading(doc, 'Claim Analysis');
+    doc.fontSize(9).font('Helvetica-Oblique').fillColor('#666666')
+      .text('Customer narrative not yet provided. Per-claim mapping is unlocked once ops pastes the VROL questionnaire via the Slack "Add Customer Narrative" button.', 50, doc.y, { width: 490 });
+    doc.fillColor('#000000');
+  }
+
+  // ===== Unaddressed Allegations =====
+  const unaddressed = analysis.unaddressed_claims || [];
+  if (unaddressed.length > 0) {
+    sectionHeading(doc, 'Unaddressed Allegations',
+      'Customer claims for which we have no available evidence — prepare manually or escalate');
+    doc.fontSize(9).font('Helvetica');
+
+    unaddressed.forEach((u, i) => {
+      checkPageSpace(doc, 40);
+      const claim = claimsById[u.claim_id];
+      const claimText = u.claim || claim?.claim || u.claim_id;
+      doc.font('Helvetica-Bold').text(`${i + 1}. `, 50, doc.y, { continued: true });
+      doc.font('Helvetica-Oblique').text(`"${claimText}"`, { width: 490 });
+      doc.font('Helvetica').fillColor('#666666')
+        .text(`Why unaddressed: ${u.why_unaddressed || ''}`, 50, doc.y, { width: 490 });
+      doc.fillColor('#000000');
+      doc.moveDown(0.4);
+    });
   }
 
   // ===== Rebuttal Points =====

@@ -76,10 +76,68 @@ DISPUTE TYPE ROUTING:
 - 10.4 / fraud: proof customer initiated booking (their own messages)
 - All types: always include deadline analysis
 
-CLAIM ANALYSIS — for each customer claim:
+CUSTOMER CLAIM PARSING (driven by the CUSTOMER NARRATIVE section of the user
+message):
+The user message will include a section "CUSTOMER NARRATIVE (from VROL
+questionnaire)". This is the customer's own account of what happened, pasted
+by ops from the issuing bank's VROL form. It is the most authoritative source
+for what the customer alleges. Treat it as the ground truth of the customer's
+position — but not as fact about reality. The dispute analysis is built around
+mapping our evidence to each of the customer's specific claims.
+
+WHEN A NARRATIVE IS PROVIDED:
+1. Extract every distinct factual claim into customer_claims[]. A claim is a
+   discrete factual assertion about what happened. Examples:
+   - timing: "chef arrived 90 minutes late"
+   - service_delivery: "two courses were never served (hamachi crudo, octopus)"
+   - behavioural: "chef took 5+ phone calls about another event during dinner"
+   - resolution: "chef refused to refund when asked"
+2. Categorise each claim as: timing | service_delivery | behavioural |
+   resolution | other
+3. Assign each claim a stable id ("claim_1", "claim_2", ...). Order them as
+   they appear in the narrative.
+4. For each claim, populate claim_analysis[] with:
+   - claim_id (matching the id in customer_claims)
+   - status: CONTRADICTED (data disproves) | SUPPORTED (data agrees with
+     customer) | UNVERIFIABLE (no relevant data we can see)
+   - evidence: specific message/data point (or "no evidence available" if
+     UNVERIFIABLE)
+   - evidence_independence: HIGH | MEDIUM | LOW (per the independence rules)
+5. Any claim you cannot map to evidence at all (status UNVERIFIABLE because
+   we have no relevant data, not because we have data that's inconclusive)
+   ALSO goes into unaddressed_claims[] with claim_id and a one-sentence
+   why_unaddressed. These are the gaps the bank reviewer might exploit; they
+   need to be visible to ops.
+6. Set narrative_provided: true.
+
+WHEN NO NARRATIVE IS PROVIDED (the user message will say so explicitly):
+- Set customer_claims: [], claim_analysis: [], unaddressed_claims: [].
+- Set narrative_provided: false.
+- Do NOT infer claims from the dispute reason code alone — without ops input
+  you would just be guessing what the customer alleged, which is the exact
+  failure mode this design is preventing.
+- In reasoning, note that the recommendation is provisional and add a flag:
+  "Customer narrative not yet provided — paste VROL questionnaire via the
+  Slack 'Add Customer Narrative' button to unlock claim-level analysis."
+- The recommendation is still derived from deadline status, attendance,
+  evidence-to-include, and evidence_weaknesses — those don't require claims.
+
+PRE-NARRATIVE RECOMMENDATION CAP (CRITICAL):
+When narrative_provided is false AND deadline_status is TIMELY_COMPLAINT,
+your recommendation must be at most COUNTER_WITH_CAVEATS (or ESCALATE if
+HIGH-severity weaknesses are present, e.g. chef hostility, no-show signals,
+own-goal NEGATIVE evidence). NEVER output STRONG_COUNTER pre-narrative for
+a TIMELY case — without knowing what the customer actually alleged, we
+cannot defensibly claim our counter is strong; we'd be confidently rebutting
+something we haven't seen. STRONG_COUNTER pre-narrative is ONLY acceptable
+when the deadline alone is decisive: deadline_status = LATE_COMPLAINT or
+NO_COMPLAINT_FOUND. In those cases the rebuttal stands on the deadline
+regardless of substance.
+
+CLAIM ANALYSIS STATUS DEFINITIONS — for each customer claim:
 - CONTRADICTED: messages or data directly disprove it
 - SUPPORTED: messages or data support the customer
-- UNVERIFIABLE: no evidence either way
+- UNVERIFIABLE: no evidence either way (this claim ALSO goes in unaddressed_claims)
 
 EVIDENCE INDEPENDENCE SCORING:
 For every piece of evidence you list in evidence_to_include, classify how
@@ -147,6 +205,7 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
 {
   "dispute_id": "string",
   "booking_id": "string",
+  "narrative_provided": "boolean (true if a customer narrative was included in the user message)",
   "deadline_status": "LATE_COMPLAINT | TIMELY_COMPLAINT | NO_COMPLAINT_FOUND",
   "deadline_iso": "ISO string",
   "customer_timezone": "IANA timezone string",
@@ -156,17 +215,33 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
     "type": "call | voicemail | whatsapp | email | ticket | null",
     "minutes_relative_to_deadline": "number (negative=before, positive=after) or null"
   },
+  "customer_claims": [
+    {
+      "id": "claim_1",
+      "category": "timing | service_delivery | behavioural | resolution | other",
+      "claim": "the customer's specific factual assertion, paraphrased neatly",
+      "specific_facts": ["list of concrete facts within the claim — e.g. specific course names, durations, behaviours"]
+    }
+  ],
   "claim_analysis": [
     {
-      "claim": "the customer's claim",
+      "claim_id": "claim_1 (must match an id in customer_claims)",
       "status": "CONTRADICTED | SUPPORTED | UNVERIFIABLE",
-      "evidence": "specific message or data point"
+      "evidence": "specific message or data point, or 'no evidence available' if UNVERIFIABLE",
+      "evidence_independence": "HIGH | MEDIUM | LOW"
+    }
+  ],
+  "unaddressed_claims": [
+    {
+      "claim_id": "claim_3 (must match an id in customer_claims)",
+      "claim": "the customer's claim text (duplicated here for ops convenience)",
+      "why_unaddressed": "one sentence on what data we'd need but don't have to address this claim"
     }
   ],
   "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW",
   "evidence_strength": "STRONG | MODERATE | WEAK",
   "recommendation": "STRONG_COUNTER | COUNTER_WITH_CAVEATS | ESCALATE",
-  "reasoning": "2-4 sentences summarising why, including a note on the independence quality of the strongest evidence",
+  "reasoning": "2-4 sentences summarising why, including a note on the independence quality of the strongest evidence. If narrative_provided is false, mark the recommendation as provisional.",
   "suggested_rebuttal_points": ["string"],
   "evidence_to_include": [
     {
@@ -178,7 +253,7 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
   "evidence_weaknesses": [
     {
       "weakness": "description of the gap or NEGATIVE evidence item",
-      "affects_claim": "which customer claim this weakness affects (or 'general' if structural)",
+      "affects_claim": "which claim_id this weakness affects (or 'general' if structural)",
       "severity": "LOW | MEDIUM | HIGH"
     }
   ],
@@ -193,6 +268,7 @@ export function buildUserMessage({
   earliestContact,
   allContacts,
   platformMessages,
+  narrative,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
 
@@ -232,6 +308,11 @@ export function buildUserMessage({
     ? `Channel: ${earliestContact.channel}, Type: ${earliestContact.type}, Time: ${earliestContact.timestamp_iso}`
     : 'NONE FOUND';
 
+  const narrativeText = (narrative || '').trim();
+  const narrativeSection = narrativeText
+    ? narrativeText
+    : '(NOT YET PROVIDED — set narrative_provided: false, leave customer_claims/claim_analysis/unaddressed_claims empty, and add the "narrative pending" flag per the rules above.)';
+
   return `DISPUTE DETAILS:
 - Dispute ID: ${dispute.id}
 - Amount: $${amount}
@@ -259,5 +340,8 @@ ALL CONTACT ATTEMPTS (chronological):
 ${contactsSection}
 
 PLATFORM MESSAGES (chef ↔ customer, chronological):
-${messagesSection}`;
+${messagesSection}
+
+CUSTOMER NARRATIVE (from VROL questionnaire):
+${narrativeSection}`;
 }

@@ -3,3 +3,4 @@ credentials/
 .env
 *.DS_Store
 test-*.js
+test-*.txt
