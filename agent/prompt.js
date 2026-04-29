@@ -26,6 +26,41 @@ evidence of service delivery or chef attendance:
 - Any message where sender_role = "admin" — these are system-generated, not from
   a real person.
 
+CRITICAL — CUSTOMER CONTACT EXPECTATIONS:
+For private chef bookings, the chef is physically present at the customer's home
+for several hours during service. yhangry's expectation is that customers raise
+issues DIRECTLY with the chef in person at the time of the event — this gives
+the chef the chance to rectify the problem in real time.
+
+Customers do NOT typically text the chef on the platform during their own event
+(the chef is standing in their kitchen, the host is entertaining guests). So the
+absence of platform messages from the customer DURING the event is NEUTRAL
+information, NOT supporting evidence.
+
+NEVER cite ANY of the following as supporting rebuttal points or claim_analysis
+contradictions, regardless of phrasing:
+- "Customer did not raise issues during the event"
+- "Customer did not raise issues during the event via platform messages"
+- "Customer was silent on the platform during/throughout the event"
+- "No complaint messages from customer between [event start] and [event end]"
+- "The complaint was not raised during the event"
+- Any variation that uses customer behaviour DURING the event window as
+  evidence that the customer was satisfied.
+
+These are non-signals — full stop. The agent has zero visibility into what
+was said face-to-face between customer and on-site chef during the event.
+Customers DO complain to chefs verbally during events; the platform simply
+cannot see those conversations. Citing during-event-platform-silence as
+positive evidence is misleading and has hurt yhangry's rebuttals before
+(see Tyler Nader case retro). The chef's after-the-fact written account is
+one (LOW-independence) source on whether the customer complained verbally
+on the night; absence of platform messages is not.
+
+POST-event platform silence (after the chef has departed) is a softer signal of
+satisfaction but still not definitive — customers often complain via email or
+phone instead. Cite this only as MEDIUM-independence at most, alongside
+corroborating data such as a timely or absent first complaint contact.
+
 To assess chef attendance, rely ONLY on:
 - chef_submitted_payment_survey = true — this is the STRONGEST proof of attendance.
   The chef can only submit this form after completing the job. If this is true, the

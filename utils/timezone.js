@@ -4,6 +4,7 @@ import zipcodes from 'zipcodes';
 
 const UK_POSTCODE_RE = /^[A-Z]{1,2}[0-9]/i;
 const US_ZIP_RE = /^\d{5}$/;
+const US_ZIP_PLUS4_RE = /^(\d{5})-\d{4}$/; // e.g. "06907-1512"
 const UAE_POSTCODES = /^(0|00)?[1-9]\d{0,4}$/; // simplified UAE detection
 
 function detectTimezone(postcode) {
@@ -14,14 +15,16 @@ function detectTimezone(postcode) {
     return 'Europe/London';
   }
 
-  // US zip code
-  if (US_ZIP_RE.test(trimmed)) {
-    const lookup = zipcodes.lookup(trimmed);
+  // US zip code (5-digit or ZIP+4 like "06907-1512")
+  const plus4Match = trimmed.match(US_ZIP_PLUS4_RE);
+  const baseZip = plus4Match ? plus4Match[1] : (US_ZIP_RE.test(trimmed) ? trimmed : null);
+  if (baseZip) {
+    const lookup = zipcodes.lookup(baseZip);
     if (lookup) {
       const zones = findTimezone(lookup.latitude, lookup.longitude);
       if (zones.length > 0) return zones[0];
     }
-    console.warn(`[timezone] US zip ${trimmed} — could not resolve timezone, falling back to America/New_York`);
+    console.warn(`[timezone] US zip ${baseZip} — could not resolve timezone, falling back to America/New_York`);
     return 'America/New_York';
   }
 
