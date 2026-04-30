@@ -42,16 +42,34 @@ const CATEGORY_LABEL = {
   other: ':grey_question: other',
 };
 
+const PRIORITY_RANK = { PRIMARY: 0, SECONDARY: 1, TERTIARY: 2 };
+const INDEPENDENCE_RANK = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+
 // Backwards-compat: handle old string-form evidence_to_include entries
+// and entries that don't yet have strategic_priority set.
 function normaliseEvidence(item) {
   if (typeof item === 'string') {
-    return { evidence: item, independence_score: null, rationale: null };
+    return { evidence: item, independence_score: null, strategic_priority: null, rationale: null };
   }
   return {
     evidence: item.evidence || '',
     independence_score: item.independence_score || null,
+    strategic_priority: item.strategic_priority || null,
     rationale: item.rationale || null,
   };
+}
+
+// Sort: PRIMARY first, then by independence within tier (HIGH first).
+// Missing priority/independence sort to the end.
+function sortEvidenceForRender(items) {
+  return [...items].sort((a, b) => {
+    const ap = PRIORITY_RANK[a.strategic_priority] ?? 99;
+    const bp = PRIORITY_RANK[b.strategic_priority] ?? 99;
+    if (ap !== bp) return ap - bp;
+    const ai = INDEPENDENCE_RANK[a.independence_score] ?? 99;
+    const bi = INDEPENDENCE_RANK[b.independence_score] ?? 99;
+    return ai - bi;
+  });
 }
 
 function formatDeadline(analysis) {
@@ -131,14 +149,17 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     .map((r, i) => `${i + 1}. ${r}`)
     .join('\n');
 
-  // ---- Evidence to include (with independence scores) ----
-  const evidenceItems = (analysis.evidence_to_include || []).map(normaliseEvidence);
+  // ---- Evidence to include (sorted by strategic priority, then independence) ----
+  const evidenceItems = sortEvidenceForRender(
+    (analysis.evidence_to_include || []).map(normaliseEvidence)
+  );
   const evidenceLines = evidenceItems
     .map((e) => {
-      const emoji = INDEPENDENCE_EMOJI[e.independence_score] || ':grey_question:';
+      const indepEmoji = INDEPENDENCE_EMOJI[e.independence_score] || ':grey_question:';
       const scoreTag = e.independence_score ? `[${e.independence_score}]` : '[unscored]';
-      const rationale = e.rationale ? ` _— ${e.rationale}_` : '';
-      return `${emoji} ${scoreTag} ${e.evidence}${rationale}`;
+      const priorityTag = e.strategic_priority ? ` _\`${e.strategic_priority}\`_` : '';
+      const rationale = e.rationale ? `\n     _${e.rationale}_` : '';
+      return `${indepEmoji} ${scoreTag}${priorityTag} ${e.evidence}${rationale}`;
     })
     .join('\n');
 
@@ -184,17 +205,19 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     },
   });
 
+  const summaryLines = [
+    `*Recommendation:* ${recEmoji} ${analysis.recommendation}`,
+    `*Evidence strength:* ${analysis.evidence_strength}`,
+  ];
+  if (analysis.rebuttal_strategy) {
+    summaryLines.push(`*Rebuttal strategy:* ${analysis.rebuttal_strategy.replace(/_/g, ' ')}`);
+  }
+  summaryLines.push(`*Dispute ID:* ${analysis.dispute_id}`);
+  summaryLines.push(`*Booking ID:* ${analysis.booking_id}`);
+
   blocks.push({
     type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: [
-        `*Recommendation:* ${recEmoji} ${analysis.recommendation}`,
-        `*Evidence strength:* ${analysis.evidence_strength}`,
-        `*Dispute ID:* ${analysis.dispute_id}`,
-        `*Booking ID:* ${analysis.booking_id}`,
-      ].join('\n'),
-    },
+    text: { type: 'mrkdwn', text: summaryLines.join('\n') },
   });
 
   // Pre-narrative banner — visible cue that ops can paste VROL to deepen analysis

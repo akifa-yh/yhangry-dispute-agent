@@ -16,19 +16,41 @@ function checkPageSpace(doc, needed = 100) {
 // Backwards-compat: handle old string-form evidence entries
 function normaliseEvidence(item) {
   if (typeof item === 'string') {
-    return { evidence: item, independence_score: null, rationale: null };
+    return { evidence: item, independence_score: null, strategic_priority: null, rationale: null };
   }
   return {
     evidence: item.evidence || '',
     independence_score: item.independence_score || null,
+    strategic_priority: item.strategic_priority || null,
     rationale: item.rationale || null,
   };
+}
+
+const PRIORITY_RANK = { PRIMARY: 0, SECONDARY: 1, TERTIARY: 2 };
+const INDEPENDENCE_RANK = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+
+// Sort evidence: PRIMARY first, then by independence within tier.
+function sortEvidenceForRender(items) {
+  return [...items].sort((a, b) => {
+    const ap = PRIORITY_RANK[a.strategic_priority] ?? 99;
+    const bp = PRIORITY_RANK[b.strategic_priority] ?? 99;
+    if (ap !== bp) return ap - bp;
+    const ai = INDEPENDENCE_RANK[a.independence_score] ?? 99;
+    const bi = INDEPENDENCE_RANK[b.independence_score] ?? 99;
+    return ai - bi;
+  });
 }
 
 const INDEPENDENCE_BADGE = {
   HIGH: { label: 'HIGH', fill: '#2E7D32', text: '#FFFFFF' },     // green
   MEDIUM: { label: 'MEDIUM', fill: '#1565C0', text: '#FFFFFF' }, // blue
   LOW: { label: 'LOW', fill: '#F9A825', text: '#000000' },       // amber
+};
+
+const PRIORITY_BADGE = {
+  PRIMARY: { label: 'PRIMARY', fill: '#1A237E', text: '#FFFFFF' },     // deep indigo
+  SECONDARY: { label: 'SECONDARY', fill: '#455A64', text: '#FFFFFF' }, // slate
+  TERTIARY: { label: 'TERTIARY', fill: '#9E9E9E', text: '#FFFFFF' },   // grey
 };
 
 const SEVERITY_BADGE = {
@@ -178,6 +200,7 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
     ['Deadline Status', analysis.deadline_status],
     ['Chef Attendance', analysis.chef_attendance_assessment],
     ['Recommendation', `${analysis.recommendation} | Evidence: ${analysis.evidence_strength}`],
+    ['Rebuttal Strategy', analysis.rebuttal_strategy ? analysis.rebuttal_strategy.replace(/_/g, ' ') : 'N/A'],
   ];
 
   // Calculate box height
@@ -322,27 +345,39 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
     drawCallLogTable(doc, allContacts);
   }
 
-  // ===== Evidence to Include (with independence scores) =====
-  const evidenceItems = (analysis.evidence_to_include || []).map(normaliseEvidence);
+  // ===== Evidence to Include (sorted by strategic priority, then independence) =====
+  const evidenceItems = sortEvidenceForRender(
+    (analysis.evidence_to_include || []).map(normaliseEvidence)
+  );
   if (evidenceItems.length > 0) {
     doc.moveDown(1);
     sectionHeading(doc, 'Evidence to Include',
-      'Independence-scored. HIGH = system-recorded, MEDIUM = customer-party messages, LOW = chef self-report.');
+      'Sorted PRIMARY first. Each item shows strategic priority + independence score.');
 
     evidenceItems.forEach((item, i) => {
-      checkPageSpace(doc, 50);
+      checkPageSpace(doc, 55);
       const rowY = doc.y;
 
-      // Number + badge
+      // Number
       doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
         .text(`${i + 1}.`, 50, rowY, { continued: false, width: 18 });
 
-      const badge = INDEPENDENCE_BADGE[item.independence_score];
-      const badgeWidth = badge ? drawBadge(doc, 68, rowY + 1, badge) : 0;
-      const textX = 68 + (badgeWidth ? badgeWidth + 6 : 0);
+      let cursorX = 68;
+      // Priority badge first (most important visual signal)
+      const priorityBadge = PRIORITY_BADGE[item.strategic_priority];
+      if (priorityBadge) {
+        const w = drawBadge(doc, cursorX, rowY + 1, priorityBadge);
+        cursorX += w + 4;
+      }
+      // Independence badge second
+      const indepBadge = INDEPENDENCE_BADGE[item.independence_score];
+      if (indepBadge) {
+        const w = drawBadge(doc, cursorX, rowY + 1, indepBadge);
+        cursorX += w + 6;
+      }
 
       doc.fontSize(9).font('Helvetica').fillColor('#000000')
-        .text(item.evidence, textX, rowY, { width: 545 - textX });
+        .text(item.evidence, cursorX, rowY, { width: 545 - cursorX });
 
       if (item.rationale) {
         doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
