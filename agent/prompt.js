@@ -85,6 +85,44 @@ DISPUTE TYPE ROUTING:
 - 10.4 / fraud: proof customer initiated booking (their own messages)
 - All types: always include deadline analysis
 
+EVIDENCE REQUIREMENTS CHECK:
+The user message may include an "EVIDENCE REQUIREMENTS PLAYBOOK" section
+containing the specific evidence types that win at the bank for this
+network/reason_code pair (sourced from network rules + yhangry's own
+historical loss patterns). When that section is present, you MUST do a
+"what we have vs what we need" check for each listed evidence type:
+
+For each REQUIRED evidence type:
+  - Use the data in BOOKING DETAILS, ALL CONTACT ATTEMPTS, PLATFORM
+    MESSAGES (and the playbook's "where to find this in yhangry data"
+    hints) to determine if we have it.
+  - PRESENT: we have credible data of this type for this booking
+  - MISSING: we don't have this evidence, OR the playbook explicitly
+    notes it's a structural gap (e.g. "currently missing — KP working
+    on it" type notes)
+
+For each STRENGTHENING evidence type:
+  - Same PRESENT/MISSING determination, but missing items here are
+    nice-to-haves not deal-breakers.
+
+Output the result in evidence_requirements_check (see schema below).
+
+ADVISORY (not strict): missing required evidence is a real weakness but
+does NOT automatically force the recommendation. STRONG_COUNTER may still
+be defensible on a TIMELY/LATE/NO_COMPLAINT case if other signals are
+strong. But: when you do recommend STRONG_COUNTER with required evidence
+missing, your reasoning MUST explicitly acknowledge the gap (e.g.
+"recommending counter despite missing click_to_accept_timestamp
+because the late-complaint argument independently wins"). When the
+recommendation is COUNTER_WITH_CAVEATS or ESCALATE, missing required
+items should appear in evidence_weaknesses with appropriate severity.
+
+When NO playbook entry exists for this code (the section will say so):
+- Set evidence_requirements_check.applicable to false.
+- Add a flag: "No evidence playbook for [network] [reason_code] —
+  agent operating on general rules only."
+- Continue with the rest of the analysis as normal.
+
 CUSTOMER CLAIM PARSING (driven by the CUSTOMER NARRATIVE section of the user
 message):
 The user message will include a section "CUSTOMER NARRATIVE (from VROL
@@ -266,6 +304,26 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
       "severity": "LOW | MEDIUM | HIGH"
     }
   ],
+  "evidence_requirements_check": {
+    "applicable": "true if a playbook entry exists for this (network, reason_code), false otherwise",
+    "code_label": "human-readable code label from the playbook, e.g. 'Visa 13.3 — Not as Described or Defective Merchandise/Services' (omit if not applicable)",
+    "required": [
+      {
+        "type": "canonical evidence type from the playbook (e.g. click_to_accept_timestamp)",
+        "status": "PRESENT | MISSING",
+        "evidence": "what we have for this type, or 'no data available' if MISSING"
+      }
+    ],
+    "strengthening": [
+      {
+        "type": "canonical evidence type",
+        "status": "PRESENT | MISSING",
+        "evidence": "what we have, or 'no data available'"
+      }
+    ],
+    "missing_required_count": "number of required items marked MISSING (0 if all present, omit if not applicable)",
+    "summary": "1-2 sentences on the requirements picture for this code. Mention specifically which required items are missing if any."
+  },
   "flags": ["any unusual factors worth human attention"]
 }`;
 
@@ -278,6 +336,7 @@ export function buildUserMessage({
   allContacts,
   platformMessages,
   narrative,
+  matrixEntry,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
 
@@ -322,6 +381,36 @@ export function buildUserMessage({
     ? narrativeText
     : '(NOT YET PROVIDED — set narrative_provided: false, leave customer_claims/claim_analysis/unaddressed_claims empty, and add the "narrative pending" flag per the rules above.)';
 
+  // Build the evidence requirements playbook section. When matrixEntry is null
+  // (no playbook for this code yet), tell Gemini explicitly so it sets
+  // evidence_requirements_check.applicable = false rather than fabricating.
+  function formatRequirements(entry) {
+    if (!entry) {
+      return `(No playbook entry for this network/reason_code. Set evidence_requirements_check.applicable: false. Add a flag noting the gap.)`;
+    }
+    const reqLines = (entry.required_evidence || []).map((t) => {
+      const src = entry.yhangry_evidence_sources?.[t] || '(no yhangry source mapping documented)';
+      return `  - ${t}\n      where to find it: ${src}`;
+    }).join('\n');
+    const strLines = (entry.strengthening_evidence || []).map((t) => {
+      const src = entry.yhangry_evidence_sources?.[t] || '(no yhangry source mapping documented)';
+      return `  - ${t}\n      where to find it: ${src}`;
+    }).join('\n');
+    return [
+      `Code: ${entry.network} ${entry.reason_code} — ${entry.label}`,
+      `Description: ${entry.description}`,
+      ``,
+      `REQUIRED evidence types for this code (must-haves):`,
+      reqLines || '  (none)',
+      ``,
+      `STRENGTHENING evidence types (nice-to-haves):`,
+      strLines || '  (none)',
+      ``,
+      `Notes (yhangry-specific): ${entry.notes || '(none)'}`,
+    ].join('\n');
+  }
+  const playbookSection = formatRequirements(matrixEntry);
+
   return `DISPUTE DETAILS:
 - Dispute ID: ${dispute.id}
 - Amount: $${amount}
@@ -352,5 +441,8 @@ PLATFORM MESSAGES (chef ↔ customer, chronological):
 ${messagesSection}
 
 CUSTOMER NARRATIVE (from VROL questionnaire):
-${narrativeSection}`;
+${narrativeSection}
+
+EVIDENCE REQUIREMENTS PLAYBOOK (for this network/reason_code):
+${playbookSection}`;
 }

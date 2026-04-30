@@ -29,6 +29,11 @@ const SEVERITY_EMOJI = {
   HIGH: ':rotating_light:',
 };
 
+const REQ_STATUS_EMOJI = {
+  PRESENT: ':white_check_mark:',
+  MISSING: ':x:',
+};
+
 const CATEGORY_LABEL = {
   timing: ':alarm_clock: timing',
   service_delivery: ':knife_fork_plate: service delivery',
@@ -280,6 +285,41 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       text: {
         type: 'mrkdwn',
         text: `*Evidence weaknesses & gaps* _(do NOT submit these as supporting evidence)_:\n${weaknessLines}`,
+      },
+    });
+  }
+
+  // Evidence requirements check — what does this code actually need to win,
+  // and what do we have? Only renders when applicable (i.e. we have a
+  // playbook entry for this network/reason_code).
+  const reqCheck = analysis.evidence_requirements_check;
+  if (reqCheck && reqCheck.applicable) {
+    const reqItems = (reqCheck.required || []).map((r) => {
+      const emoji = REQ_STATUS_EMOJI[r.status] || ':grey_question:';
+      const evidenceTail = r.evidence ? ` — _${r.evidence}_` : '';
+      return `${emoji} *${r.type}*${evidenceTail}`;
+    }).join('\n');
+    const strItems = (reqCheck.strengthening || []).map((r) => {
+      const emoji = REQ_STATUS_EMOJI[r.status] || ':grey_question:';
+      const evidenceTail = r.evidence ? ` — _${r.evidence}_` : '';
+      return `${emoji} ${r.type}${evidenceTail}`;
+    }).join('\n');
+
+    const headerSuffix = reqCheck.code_label ? ` _(${reqCheck.code_label})_` : '';
+    const missingNote = reqCheck.missing_required_count > 0
+      ? `\n:warning: *${reqCheck.missing_required_count} required item${reqCheck.missing_required_count === 1 ? '' : 's'} missing.* Strengthen the case manually before submission, or escalate.`
+      : '';
+    const summaryNote = reqCheck.summary ? `\n_${reqCheck.summary}_` : '';
+
+    const sections = [];
+    if (reqItems) sections.push(`*Required:*\n${reqItems}`);
+    if (strItems) sections.push(`*Strengthening:*\n${strItems}`);
+
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Evidence requirements check*${headerSuffix}:\n${sections.join('\n\n')}${missingNote}${summaryNote}`,
       },
     });
   }

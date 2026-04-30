@@ -7,6 +7,7 @@ import * as conduit from '../integrations/conduit.js';
 import * as slack from '../integrations/slack.js';
 import { getComplaintDeadline } from '../utils/timezone.js';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
+import { lookupMatrixEntry } from './evidence_matrix.js';
 
 function normalisePhoneForLookup(phone, postcode) {
   if (!phone) return null;
@@ -159,6 +160,25 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   const messages = await bigquery.getPlatformMessages(booking.order_id);
   console.log(`[agent] Found ${messages.length} platform messages`);
 
+  // Step 5b: Look up the evidence requirements playbook for this dispute's
+  // (network, reason_code) pair. The matrix tells us which evidence types
+  // win at the bank for this code so the agent can do a "what we have vs
+  // what we'd need" check. Returns null if we don't have a playbook for
+  // this code yet — Gemini handles that case gracefully (see prompt.js).
+  const matrixEntry = lookupMatrixEntry({
+    network: undefined, // inferred from reason_code prefix
+    reason_code: dispute.network_reason_code,
+  });
+  if (matrixEntry) {
+    console.log(
+      `[agent] Evidence playbook: ${matrixEntry.network} ${matrixEntry.reason_code} (${matrixEntry.required_evidence.length} required, ${matrixEntry.strengthening_evidence.length} strengthening)`
+    );
+  } else if (dispute.network_reason_code) {
+    console.log(
+      `[agent] No evidence playbook for ${dispute.network_reason_code} — Gemini will proceed without requirements check`
+    );
+  }
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -173,6 +193,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     allContacts,
     platformMessages: messages,
     narrative,
+    matrixEntry,
   });
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);

@@ -383,6 +383,70 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
     });
   }
 
+  // ===== Evidence Requirements Check =====
+  // What does this dispute code actually need to win at the bank, and
+  // what do we have? Only renders when applicable (we have a playbook
+  // entry for this network/reason_code).
+  const reqCheck = analysis.evidence_requirements_check;
+  if (reqCheck && reqCheck.applicable) {
+    doc.moveDown(0.5);
+    const subtitle = reqCheck.code_label
+      ? `Bank evidence requirements for ${reqCheck.code_label}.`
+      : 'Bank evidence requirements for this dispute code.';
+    sectionHeading(doc, 'Evidence Requirements Check', subtitle);
+
+    function drawReqRow(item, sectionLabel) {
+      checkPageSpace(doc, 40);
+      const rowY = doc.y;
+      const isMissing = item.status === 'MISSING';
+      const statusBadge = isMissing
+        ? { label: 'MISSING', fill: '#D32F2F', text: '#FFFFFF' }
+        : { label: 'PRESENT', fill: '#2E7D32', text: '#FFFFFF' };
+      const badgeWidth = drawBadge(doc, 50, rowY + 1, statusBadge);
+      const textX = 50 + badgeWidth + 6;
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
+        .text(item.type || '', textX, rowY, { width: 545 - textX });
+      if (item.evidence) {
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
+          .text(item.evidence, 50, doc.y + 1, { width: 495 });
+        doc.fillColor('#000000');
+      }
+      doc.moveDown(0.35);
+    }
+
+    if ((reqCheck.required || []).length > 0) {
+      doc.fontSize(10).font('Helvetica-Bold').fillColor('#000000')
+        .text('Required:', 50, doc.y, { width: 495 });
+      doc.moveDown(0.15);
+      reqCheck.required.forEach((r) => drawReqRow(r, 'required'));
+    }
+
+    if ((reqCheck.strengthening || []).length > 0) {
+      doc.moveDown(0.2);
+      doc.fontSize(10).font('Helvetica-Bold').fillColor('#000000')
+        .text('Strengthening:', 50, doc.y, { width: 495 });
+      doc.moveDown(0.15);
+      reqCheck.strengthening.forEach((r) => drawReqRow(r, 'strengthening'));
+    }
+
+    if (reqCheck.missing_required_count > 0) {
+      doc.moveDown(0.3);
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#D32F2F')
+        .text(
+          `${reqCheck.missing_required_count} required item${reqCheck.missing_required_count === 1 ? '' : 's'} missing — strengthen the case manually before submission, or escalate.`,
+          50, doc.y, { width: 495 }
+        );
+      doc.fillColor('#000000');
+    }
+
+    if (reqCheck.summary) {
+      doc.moveDown(0.3);
+      doc.fontSize(9).font('Helvetica-Oblique').fillColor('#444444')
+        .text(reqCheck.summary, 50, doc.y, { width: 495 });
+      doc.fillColor('#000000');
+    }
+  }
+
   // ===== Flags =====
   if (analysis.flags && analysis.flags.length > 0) {
     doc.moveDown(0.5);
