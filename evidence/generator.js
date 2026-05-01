@@ -1,4 +1,46 @@
 import PDFDocument from 'pdfkit';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Codes where click-to-accept (T&Cs, cancellation policy, stored-payment
+// authorisation) is required evidence per the matrix. For these we embed
+// the yhangry checkout screenshot as a page in the evidence PDF, since
+// per-user timestamped acceptance isn't yet captured on the booking record.
+const CLICK_TO_ACCEPT_CODES = new Set([
+  'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
+  'mastercard:4853', 'mastercard:4860',
+]);
+
+function inferDisputeNetwork(dispute) {
+  const n = (dispute?.network || '').toLowerCase();
+  if (n) return n;
+  const c = String(dispute?.network_reason_code || '').trim();
+  if (/^\d{2}\.\d/.test(c)) return 'visa';
+  if (/^4\d{3}$/.test(c)) return 'mastercard';
+  return '';
+}
+
+function shouldEmbedCheckoutScreenshot(dispute) {
+  const code = String(dispute?.network_reason_code || '').trim();
+  return CLICK_TO_ACCEPT_CODES.has(`${inferDisputeNetwork(dispute)}:${code}`);
+}
+
+function drawCheckoutScreenshotPage(doc) {
+  const imgPath = path.join(__dirname, '..', 'assets', 'checkout-click-to-accept.jpeg');
+  if (!fs.existsSync(imgPath)) {
+    console.warn('[evidence] checkout-click-to-accept.jpeg missing — skipping screenshot page');
+    return;
+  }
+  doc.addPage();
+  sectionHeading(doc,
+    'yhangry Checkout — Click-to-Accept Disclosure',
+    'Booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.'
+  );
+  doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
+}
 
 function collectBuffer(doc) {
   return new Promise((resolve, reject) => {
@@ -333,6 +375,11 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
     }
   } else {
     doc.fontSize(9).font('Helvetica').text('No platform messages available.');
+  }
+
+  // ===== Click-to-Accept Screenshot (Visa 13.3/13.5/13.6/13.7, MC 4853/4860) =====
+  if (shouldEmbedCheckoutScreenshot(dispute)) {
+    drawCheckoutScreenshotPage(doc);
   }
 
   // ===== Contact Log (Aircall / Bird / Conduit) =====

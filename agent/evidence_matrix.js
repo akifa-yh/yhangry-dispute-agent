@@ -176,7 +176,7 @@ const visa_13_3 = {
     agreed_service_description:
       'Pre-event platform messages where chef proposed the menu and customer accepted (look for "Your quote has been updated" + "All set!" type pattern).',
     click_to_accept_timestamp:
-      'CURRENTLY MISSING — yhangry checkout displays T&Cs above the "Confirm and pay" button but does not capture per-user timestamped acceptance on the booking record. KP has product work to add this. Until then, include the generic checkout screenshot as a partial substitute.',
+      'Per-user timestamped click-to-accept is not yet captured on the booking record (KP product work pending). The agent auto-embeds the yhangry checkout screenshot (assets/checkout-click-to-accept.jpeg) as a dedicated page in the evidence PDF for this code, demonstrating that booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.',
     chef_attendance_proof:
       'chef_submitted_payment_survey = true (HIGH). is_chef_ready_response / is_chef_on_time_response. Day-of arrival messages from chef.',
     service_delivery_proof:
