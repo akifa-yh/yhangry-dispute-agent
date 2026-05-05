@@ -72,6 +72,15 @@ function sortEvidenceForRender(items) {
   });
 }
 
+function formatEventDate(raw) {
+  if (!raw) return 'N/A';
+  const s = raw?.value || String(raw);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return s;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${m[3]} ${months[parseInt(m[2], 10) - 1]} ${m[1]}`;
+}
+
 function formatDeadline(analysis) {
   const { deadline_status, earliest_contact } = analysis;
   const ec = earliest_contact || {};
@@ -213,7 +222,13 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     summaryLines.push(`*Rebuttal strategy:* ${analysis.rebuttal_strategy.replace(/_/g, ' ')}`);
   }
   summaryLines.push(`*Dispute ID:* ${analysis.dispute_id}`);
-  summaryLines.push(`*Booking ID:* ${analysis.booking_id}`);
+  const bookingIdForLink = booking.order_id || analysis.booking_id;
+  summaryLines.push(
+    `*Booking:* <https://yhangry.com/nova/resources/orders/${bookingIdForLink}|#${bookingIdForLink}>`
+  );
+  summaryLines.push(`*Event date:* ${formatEventDate(booking.event_date)}`);
+  const chefName = [booking.chef_first_name, booking.chef_last_name].filter(Boolean).join(' ').trim();
+  if (chefName) summaryLines.push(`*Chef:* ${chefName}`);
 
   blocks.push({
     type: 'section',
