@@ -270,6 +270,29 @@ slackApp.view('add_narrative_submitted', async ({ ack, body, view }) => {
 
 const app = receiver.app;
 
+// Webhook idempotency. Stripe occasionally redelivers events: cold-start
+// timeouts on Render free-tier are the common cause (gateway buffers the
+// request during ~20s wake-up, Stripe times out at 30s and retries, both
+// deliveries succeed against the now-warm server). Without dedup we run
+// the full investigation twice and post two Slack messages — exactly what
+// happened 2026-05-02 17:11 IST for du_1TSbuXJslp99M2l08y417Rqk. Stripe
+// event IDs are stable across retries, so we keep an in-memory map and
+// skip duplicates within a 5-minute window. The map gets wiped on idle-
+// sleep, but back-to-back retries hit the same warm process so it works
+// for the case we actually see.
+const seenStripeEventIds = new Map();
+const STRIPE_EVENT_TTL_MS = 5 * 60 * 1000;
+
+function alreadyProcessedStripeEvent(eventId) {
+  const now = Date.now();
+  for (const [id, t] of seenStripeEventIds) {
+    if (now - t > STRIPE_EVENT_TTL_MS) seenStripeEventIds.delete(id);
+  }
+  if (seenStripeEventIds.has(eventId)) return true;
+  seenStripeEventIds.set(eventId, now);
+  return false;
+}
+
 // Stripe needs raw body for signature verification
 app.post(
   '/webhooks/stripe',
@@ -300,11 +323,19 @@ app.post(
       return res.status(400).send('Webhook Error: signature verification failed');
     }
 
-    // Respond 200 immediately
+    // Respond 200 immediately. We always 200 a duplicate too — otherwise
+    // Stripe keeps retrying.
     res.status(200).json({ received: true });
 
     // Only process dispute.created events
     if (event.type !== 'charge.dispute.created') {
+      return;
+    }
+
+    // Idempotency: skip if we've already processed this Stripe event id
+    // within the TTL window. Catches retries from cold-start timeouts.
+    if (alreadyProcessedStripeEvent(event.id)) {
+      console.log(`[stripe] Skipping duplicate event ${event.id} (dispute ${event.data.object.id})`);
       return;
     }
 
