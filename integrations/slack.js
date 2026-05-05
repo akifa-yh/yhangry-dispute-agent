@@ -262,3 +262,39 @@ export async function postFollowUp(threadTs, text) {
     text,
   });
 }
+
+// === Product gap alerts ===
+// Posts to #product-gaps channel when a tag has appeared in 3+ disputes
+// over the past 30 days. Channel id is read from
+// SLACK_PRODUCT_GAPS_CHANNEL_ID. The dispute agent bot must be a member of
+// the channel (Slack will silently drop posts otherwise).
+
+const productGapsChannelId = () => process.env.SLACK_PRODUCT_GAPS_CHANNEL_ID;
+
+const PRODUCT_GAP_LABELS = {
+  missing_click_to_accept_timestamp: 'Missing click-to-accept timestamp',
+  no_chef_gps_at_venue: 'No chef GPS at venue',
+  no_chef_arrival_photo: 'No chef arrival photo',
+  no_signed_substitution_consent: 'No signed substitution consent',
+  no_post_event_review_capture: 'No post-event review capture',
+  chef_payout_photo_unusable: 'Chef payout photo unusable',
+  customer_acknowledgment_not_captured: 'Customer acknowledgment not captured',
+};
+
+export async function postProductGapAlert({ tag, occurrenceCount, recentEvents }) {
+  const channel = productGapsChannelId();
+  if (!channel) {
+    console.warn('[slack] SLACK_PRODUCT_GAPS_CHANNEL_ID not set — skipping product gap alert');
+    return;
+  }
+  const label = PRODUCT_GAP_LABELS[tag] || tag;
+  const lines = (recentEvents || []).slice(0, 5).map((e) => {
+    const dateStr = e.event_date?.value || e.event_date || 'unknown date';
+    const code = e.network_reason_code || 'unknown code';
+    const booking = e.booking_id != null ? `booking ${e.booking_id}` : 'booking n/a';
+    return `• \`${e.dispute_id}\` — ${booking}, event ${dateStr}, ${code}`;
+  });
+  const text = `:warning: *Product gap:* \`${tag}\` (${label}) — flagged in ${occurrenceCount} disputes over the past 30 days.\n${lines.join('\n')}`;
+  await web().chat.postMessage({ channel, text });
+  console.log(`[slack] Posted product gap alert for ${tag} (${occurrenceCount} occurrences)`);
+}

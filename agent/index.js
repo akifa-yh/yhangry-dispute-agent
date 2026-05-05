@@ -198,7 +198,46 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);
 
+  // Step 7: Product gap tracking — record any tags Gemini emitted, then check
+  // 30-day frequency thresholds and post to #product-gaps for newly-crossed
+  // tags. All BigQuery operations are gated on PRODUCT_GAPS_ENABLED so this
+  // is a no-op until Jordan grants Data Editor and the dataset/tables exist.
+  // Wrapped in try/catch so write failures (e.g. permission denied) never
+  // block the main analysis.
+  try {
+    await trackProductGaps({ analysis, dispute, booking });
+  } catch (err) {
+    console.error('[agent] Product gap tracking failed (non-fatal):', err.message);
+  }
+
   return { booking, deadlineIso, timezone, allContacts, messages, analysis };
+}
+
+const PRODUCT_GAP_THRESHOLD = 3;
+
+async function trackProductGaps({ analysis, dispute, booking }) {
+  const tags = analysis?.product_gaps_identified || [];
+  if (tags.length === 0) return;
+
+  await bigquery.recordProductGaps({
+    disputeId: dispute.id,
+    bookingId: booking.order_id,
+    tags,
+    networkReasonCode: dispute.network_reason_code,
+    eventDate: booking.event_date,
+  });
+
+  for (const tag of tags) {
+    const count = await bigquery.getRecentGapCount(tag);
+    if (count < PRODUCT_GAP_THRESHOLD) continue;
+
+    const lastAlerted = await bigquery.getRecentAlert(tag);
+    if (lastAlerted) continue; // already alerted within suppression window
+
+    const recentEvents = await bigquery.getRecentEventsForTag(tag);
+    await slack.postProductGapAlert({ tag, occurrenceCount: count, recentEvents });
+    await bigquery.recordAlert(tag, count);
+  }
 }
 
 /**

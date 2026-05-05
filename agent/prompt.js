@@ -374,6 +374,42 @@ Distinguish "no winning strategy" (ESCALATE) from "strategy exists but
 has gaps" (COUNTER_WITH_CAVEATS) from "clear winning strategy"
 (STRONG_COUNTER).
 
+PRODUCT GAP TAGGING:
+yhangry tracks recurring evidence gaps in product_gaps_identified[] so the
+team knows what product/data work would make future disputes easier to win.
+Emit zero or more of the canonical tags below ONLY when the gap was
+material to THIS dispute — i.e. it weakened the rebuttal strategy, showed
+up as a MISSING required item, contributed to evidence_weaknesses, or
+forced a downgrade from STRONG_COUNTER to COUNTER_WITH_CAVEATS. Do NOT
+emit a tag just because the gap exists in general — only when it bit us
+on this specific case.
+
+Canonical tags (use these exact strings):
+- missing_click_to_accept_timestamp — required click-to-accept appears as
+  MISSING in evidence_requirements_check.required for this code (the
+  embedded checkout screenshot is a stopgap, not per-user proof).
+- no_chef_gps_at_venue — chef_attendance_assessment is anything other than
+  CONFIRMED-via-survey AND there is no GPS / location proof to settle the
+  attendance question.
+- no_chef_arrival_photo — customer claims the chef was late or absent and
+  no chef-side day-of arrival photo exists to corroborate the chef's
+  account.
+- no_signed_substitution_consent — a customer claim alleges menu
+  substitution or missing courses AND no in-platform record of the
+  customer consenting to the substitution exists.
+- no_post_event_review_capture — the case would benefit from positive
+  customer acknowledgment post-event but no post-event customer message
+  or review exists for this booking.
+- chef_payout_photo_unusable — chef payout photos exist but are
+  stock-style / EXIF-stripped / generic, so they appear in
+  evidence_weaknesses rather than evidence_to_include.
+- customer_acknowledgment_not_captured — a SUPPORTED customer claim could
+  have been CONTRADICTED by a positive customer acknowledgment that we
+  don't have (broader than no_post_event_review_capture: applies even
+  when some post-event contact exists but lacks acknowledgment substance).
+
+If none apply, return an empty array.
+
 OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
 
 {
@@ -453,7 +489,8 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
     "missing_required_count": "number of required items marked MISSING (0 if all present, omit if not applicable)",
     "summary": "1-2 sentences on the requirements picture for this code. Mention specifically which required items are missing if any."
   },
-  "flags": ["any unusual factors worth human attention"]
+  "flags": ["any unusual factors worth human attention"],
+  "product_gaps_identified": ["zero or more of: missing_click_to_accept_timestamp | no_chef_gps_at_venue | no_chef_arrival_photo | no_signed_substitution_consent | no_post_event_review_capture | chef_payout_photo_unusable | customer_acknowledgment_not_captured. Emit only when the gap was material to THIS dispute (see PRODUCT GAP TAGGING rules above). Empty array if none apply."]
 }`;
 
 export function buildUserMessage({

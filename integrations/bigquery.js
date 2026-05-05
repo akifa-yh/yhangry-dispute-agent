@@ -129,3 +129,73 @@ export async function getPlatformMessages(orderId) {
   const [rows] = await bigquery.query({ query, params: { orderId } });
   return rows;
 }
+
+// === Product gap tracking ===
+// All gated on PRODUCT_GAPS_ENABLED env var. When false, these are no-ops
+// (writes return undefined, reads return safe defaults) so callers don't
+// need to branch. Flip to 'true' on Render once Jordan grants Data Editor
+// to akifa-agent@yhangry.iam.gserviceaccount.com on the dispute_agent
+// dataset and the tables exist (see scripts/create-product-gap-tables.sql).
+
+const PG_DATASET = process.env.PRODUCT_GAPS_DATASET || 'dispute_agent';
+const pgEnabled = () => process.env.PRODUCT_GAPS_ENABLED === 'true';
+const pgT = (table) => `\`${p}.${PG_DATASET}.${table}\``;
+
+export async function recordProductGaps({ disputeId, bookingId, tags, networkReasonCode, eventDate }) {
+  if (!pgEnabled() || !tags || tags.length === 0) return;
+  const rows = tags.map((tag) => ({
+    dispute_id: disputeId,
+    booking_id: bookingId != null ? Number(bookingId) : null,
+    tag,
+    network_reason_code: networkReasonCode || null,
+    event_date: eventDate || null,
+  }));
+  await bigquery.dataset(PG_DATASET).table('product_gap_events').insert(rows);
+  console.log(`[bigquery] Recorded ${rows.length} product gap event(s) for ${disputeId}`);
+}
+
+export async function getRecentGapCount(tag, windowDays = 30) {
+  if (!pgEnabled()) return 0;
+  const query = `
+    SELECT COUNT(DISTINCT dispute_id) AS n
+    FROM ${pgT('product_gap_events')}
+    WHERE tag = @tag
+      AND inserted_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+  `;
+  const [rows] = await bigquery.query({ query, params: { tag, days: windowDays } });
+  return Number(rows[0]?.n || 0);
+}
+
+export async function getRecentAlert(tag, suppressDays = 14) {
+  if (!pgEnabled()) return null;
+  const query = `
+    SELECT MAX(alerted_at) AS last_alerted
+    FROM ${pgT('product_gap_alerts')}
+    WHERE tag = @tag
+      AND alerted_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+  `;
+  const [rows] = await bigquery.query({ query, params: { tag, days: suppressDays } });
+  return rows[0]?.last_alerted?.value || rows[0]?.last_alerted || null;
+}
+
+export async function recordAlert(tag, occurrenceCount) {
+  if (!pgEnabled()) return;
+  await bigquery
+    .dataset(PG_DATASET)
+    .table('product_gap_alerts')
+    .insert([{ tag, occurrence_count: Number(occurrenceCount) }]);
+}
+
+export async function getRecentEventsForTag(tag, windowDays = 30, limit = 5) {
+  if (!pgEnabled()) return [];
+  const query = `
+    SELECT dispute_id, booking_id, network_reason_code, event_date, inserted_at
+    FROM ${pgT('product_gap_events')}
+    WHERE tag = @tag
+      AND inserted_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+    ORDER BY inserted_at DESC
+    LIMIT @lim
+  `;
+  const [rows] = await bigquery.query({ query, params: { tag, days: windowDays, lim: limit } });
+  return rows;
+}
