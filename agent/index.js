@@ -5,6 +5,7 @@ import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
 import * as slack from '../integrations/slack.js';
+import { fetchCustomerCorrespondence } from '../integrations/gmail.js';
 import { getComplaintDeadline } from '../utils/timezone.js';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { lookupMatrixEntry } from './evidence_matrix.js';
@@ -160,6 +161,21 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   const messages = await bigquery.getPlatformMessages(booking.order_id);
   console.log(`[agent] Found ${messages.length} platform messages`);
 
+  // Step 5a: Pull recent Gmail correspondence with the customer
+  // (Tyler retro #11). Gated on GMAIL_ENABLED — when off, returns []. When
+  // on, surfaces customer admissions ("I'll withdraw the dispute", "filed
+  // in error", etc.) which are the strongest possible counter-evidence.
+  // Errors are non-fatal: a Gmail outage shouldn't block dispute analysis.
+  let gmailMessages = [];
+  try {
+    gmailMessages = await fetchCustomerCorrespondence(booking.customer_email, {
+      daysBack: 90,
+      maxMessages: 10,
+    });
+  } catch (err) {
+    console.warn('[agent] Gmail fetch failed (non-fatal):', err.message);
+  }
+
   // Step 5b: Look up the evidence requirements playbook for this dispute's
   // (network, reason_code) pair. The matrix tells us which evidence types
   // win at the bank for this code so the agent can do a "what we have vs
@@ -217,6 +233,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     disputeCreatedIso,
     isPreEvent,
     daysUntilEvent,
+    gmailMessages,
   });
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);

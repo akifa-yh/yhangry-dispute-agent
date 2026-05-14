@@ -374,6 +374,44 @@ Distinguish "no winning strategy" (ESCALATE) from "strategy exists but
 has gaps" (COUNTER_WITH_CAVEATS) from "clear winning strategy"
 (STRONG_COUNTER).
 
+CUSTOMER ADMISSION DETECTION (from Gmail correspondence):
+The user message may include a GMAIL CORRESPONDENCE section with recent
+emails between info@yhangry.com and the cardholder's email address. When
+this section is populated, scan it carefully for a "customer admission" —
+defined as the cardholder explicitly acknowledging in writing that:
+  - The dispute was filed in error / by mistake
+  - They will withdraw / cancel / drop the dispute with their bank
+  - They were confused about pricing, currency, or another detail
+  - They apologise for the dispute
+
+A customer admission is the strongest possible counter-evidence in any
+dispute — banks rule for the merchant essentially every time when the
+cardholder has admitted error in writing. Examples of admission language:
+  - "I will cancel the dispute"
+  - "I'll withdraw the dispute"
+  - "I'll let my bank know it was a mistake"
+  - "Filed in error"
+  - "My apologies"
+  - "My mistake"
+  - "I didn't realise..."
+  - "Sorry for the confusion"
+
+When you detect an admission:
+  1. Set customer_admission_detected: true
+  2. Quote the exact admission text (1-2 sentences max) into
+     customer_admission_evidence
+  3. The admission OVERRIDES whatever rebuttal strategy you would have
+     picked otherwise — make this evidence the leading argument
+  4. Add it to evidence_to_include with strategic_priority: PRIMARY,
+     independence_score: HIGH, and rationale noting it as the
+     cardholder's own written acknowledgement
+  5. In reasoning, lead with the admission
+
+If no admission is present (or the Gmail section is empty), set
+customer_admission_detected: false and leave customer_admission_evidence
+empty/null. Do NOT fabricate admissions — only quote actual text from
+the Gmail emails.
+
 PRE-EVENT DISPUTE HANDLING:
 The user message includes a PRE-EVENT CONTEXT block stating whether the
 dispute was filed BEFORE the booking's event date. When is_pre_event is
@@ -543,7 +581,9 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
     "summary": "1-2 sentences on the requirements picture for this code. Mention specifically which required items are missing if any."
   },
   "flags": ["any unusual factors worth human attention"],
-  "product_gaps_identified": ["zero or more of: missing_click_to_accept_timestamp | no_chef_gps_at_venue | no_chef_arrival_photo | no_signed_substitution_consent | no_post_event_review_capture | chef_payout_photo_unusable | customer_acknowledgment_not_captured. Emit only when the gap was material to THIS dispute (see PRODUCT GAP TAGGING rules above). Empty array if none apply."]
+  "product_gaps_identified": ["zero or more of: missing_click_to_accept_timestamp | no_chef_gps_at_venue | no_chef_arrival_photo | no_signed_substitution_consent | no_post_event_review_capture | chef_payout_photo_unusable | customer_acknowledgment_not_captured. Emit only when the gap was material to THIS dispute (see PRODUCT GAP TAGGING rules above). Empty array if none apply."],
+  "customer_admission_detected": "boolean. TRUE only when the GMAIL CORRESPONDENCE section contains an explicit written admission from the cardholder (per CUSTOMER ADMISSION DETECTION rules above). NEVER fabricate.",
+  "customer_admission_evidence": "string — the exact quoted admission text (1-2 sentences). Empty string when customer_admission_detected is false."
 }`;
 
 export function buildUserMessage({
@@ -559,6 +599,7 @@ export function buildUserMessage({
   disputeCreatedIso,
   isPreEvent,
   daysUntilEvent,
+  gmailMessages,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
 
@@ -671,6 +712,31 @@ ${messagesSection}
 CUSTOMER NARRATIVE (from VROL questionnaire):
 ${narrativeSection}
 
+GMAIL CORRESPONDENCE (info@yhangry.com ↔ ${booking.customer_email || 'customer'}, last 90 days):
+${formatGmailMessages(gmailMessages)}
+
 EVIDENCE REQUIREMENTS PLAYBOOK (for this network/reason_code):
 ${playbookSection}`;
+}
+
+function formatGmailMessages(messages) {
+  if (!messages || messages.length === 0) {
+    return '(No Gmail correspondence in window — either Gmail integration is not enabled, or no emails were exchanged with this customer in the last 90 days.)';
+  }
+  return messages
+    .map((m, i) => {
+      const date = m.date || 'unknown date';
+      const from = m.from || 'unknown sender';
+      const to = m.to || 'unknown recipient';
+      const subject = m.subject || '(no subject)';
+      // Each message body is already capped at 4000 chars in the fetcher
+      return `--- EMAIL ${i + 1} ---
+Date: ${date}
+From: ${from}
+To: ${to}
+Subject: ${subject}
+Body:
+${m.body || '(empty body)'}`;
+    })
+    .join('\n\n');
 }

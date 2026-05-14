@@ -178,14 +178,25 @@ const GREY_TEXT = '#555555';
 /**
  * Pick the strongest single point to feature in the BOTTOM-LINE callout.
  *
- * Priority is dispute-code aware:
- *   - CUSTOMER_CONTACT_FIRST recommendation → pre-event banner (always)
- *   - 12.x processing-error codes → "no discrepancy" framing (NEVER the
- *     deadline/attendance arguments, per matrix notes for retro #9)
- *   - Everything else → procedural (late/no-complaint) > service-rendered >
- *     PRIMARY/HIGH evidence > reasoning summary
+ * Priority order:
+ *   1. Customer admission from Gmail (Tyler retro #11) — strongest possible
+ *      evidence; bank reviewers rule for merchant nearly every time when
+ *      cardholder admits the dispute was filed in error
+ *   2. CUSTOMER_CONTACT_FIRST recommendation → pre-event banner
+ *   3. 12.x processing-error codes → "no discrepancy" framing
+ *   4. Everything else → procedural (late/no-complaint) > service-rendered >
+ *      PRIMARY/HIGH evidence > reasoning summary
  */
 function pickBottomLine(analysis, dispute, booking) {
+  // Customer admission trumps everything. Surface the literal quote.
+  if (analysis.customer_admission_detected === true && analysis.customer_admission_evidence) {
+    return {
+      headline: 'CARDHOLDER ADMITTED THE DISPUTE WAS FILED IN ERROR',
+      detail: `Cardholder's own written statement (from Gmail correspondence with info@yhangry.com): "${String(analysis.customer_admission_evidence).trim()}"`,
+      tone: 'strong',
+    };
+  }
+
   if (analysis.recommendation === 'CUSTOMER_CONTACT_FIRST') {
     const eventStr = formatEventDateLong(booking.event_date);
     return {
