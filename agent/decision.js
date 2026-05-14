@@ -194,14 +194,15 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
   // ---- Build blocks ----
   const blocks = [];
 
-  // Optional "updated with narrative" context header (only on re-analysis posts)
+  // Optional "re-analysed" context header (only on re-analysis posts).
+  // Triggered by both the Paste Narrative flow and the Upload VROL flow.
   if (options.updatedWithNarrativeAt) {
     blocks.push({
       type: 'context',
       elements: [
         {
           type: 'mrkdwn',
-          text: `:memo: _Updated with customer narrative at ${options.updatedWithNarrativeAt}_`,
+          text: `:memo: _Re-analysed with new context at ${options.updatedWithNarrativeAt}_`,
         },
       ],
     });
@@ -255,7 +256,7 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: ':information_source: *Customer narrative not yet provided.* Recommendation below is provisional, based on deadline + chef attendance + platform data only. Click *Add Customer Narrative* and paste the VROL questionnaire to extract the customer\'s specific claims and map our evidence to each.',
+        text: ':information_source: *Customer narrative not yet provided.* Recommendation below is provisional, based on deadline + chef attendance + platform data only. Use :page_facing_up: *Upload VROL* (preferred — also corrects the reason code) or :pencil2: *Paste Narrative* to add the customer\'s account and unlock claim-level analysis.',
       },
     });
   }
@@ -401,11 +402,12 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     nrc: dispute.network_reason_code || null,
   });
 
-  // "Add Customer Narrative" is placed first so it's the most prominent
-  // next-step affordance when narrative is missing.
+  // "Paste Narrative" is the fallback when ops doesn't have the VROL PDF
+  // (Upload VROL is the preferred path — see retro #10). Both feed the
+  // narrative side of the analysis.
   const narrativeButtonText = narrativeProvided
-    ? 'Update Customer Narrative'
-    : 'Add Customer Narrative';
+    ? 'Update Narrative'
+    : 'Paste Narrative';
 
   blocks.push({
     type: 'actions',

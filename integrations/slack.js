@@ -133,7 +133,7 @@ export async function openNarrativeModal({ triggerId, dispute, channelId, messag
       type: 'modal',
       callback_id: 'add_narrative_submitted',
       private_metadata: meta,
-      title: { type: 'plain_text', text: 'Customer narrative' },
+      title: { type: 'plain_text', text: 'Paste narrative' },
       submit: { type: 'plain_text', text: 'Re-analyse' },
       close: { type: 'plain_text', text: 'Cancel' },
       blocks: [
@@ -141,14 +141,14 @@ export async function openNarrativeModal({ triggerId, dispute, channelId, messag
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `Paste the customer's account from the VROL questionnaire${customerName ? ` for *${customerName}*` : ''}.\n\nSpecifically the section titled _"Provide details of what was ordered and not as described"_.\n\nThe agent will extract specific factual claims, map our evidence to each (CONTRADICTED / SUPPORTED / UNVERIFIABLE), and flag any allegations we can't address with available data.`,
+            text: `Paste any customer-side narrative for${customerName ? ` *${customerName}*` : ' this dispute'} — email correspondence, support ticket transcript, or the free-text VROL questionnaire fields if you don't have the PDF.\n\n*If you have the VROL PDF, use* :page_facing_up: *Upload VROL instead* — it extracts the narrative AND overrides the reason code in one step.\n\nThe agent will extract specific factual claims, map our evidence to each (CONTRADICTED / SUPPORTED / UNVERIFIABLE), and flag allegations we can't address with available data.`,
           },
         },
         { type: 'divider' },
         {
           type: 'input',
           block_id: 'narrative_block',
-          label: { type: 'plain_text', text: "Customer's account of events" },
+          label: { type: 'plain_text', text: "Customer narrative" },
           element: {
             type: 'plain_text_input',
             action_id: 'narrative_input',

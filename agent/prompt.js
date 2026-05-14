@@ -193,8 +193,8 @@ WHEN NO NARRATIVE IS PROVIDED (the user message will say so explicitly):
   you would just be guessing what the customer alleged, which is the exact
   failure mode this design is preventing.
 - In reasoning, note that the recommendation is provisional and add a flag:
-  "Customer narrative not yet provided — paste VROL questionnaire via the
-  Slack 'Add Customer Narrative' button to unlock claim-level analysis."
+  "Customer narrative not yet provided — use the Slack 'Upload VROL' button
+  (preferred) or 'Paste Narrative' button to unlock claim-level analysis."
 - The recommendation is still derived from deadline status, attendance,
   evidence-to-include, and evidence_weaknesses — those don't require claims.
 
