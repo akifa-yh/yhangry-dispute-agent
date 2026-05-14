@@ -254,6 +254,63 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
 }
 
 /**
+ * Open the "Upload VROL" modal. Tyler retro #10.
+ *
+ * The Visa Resolve Online (VROL) PDF is the issuing bank's structured
+ * dispute form. It's the authoritative source for the network reason
+ * code (Stripe's webhook field is sometimes unreliable). Submission handler
+ * parses the PDF, overrides the dispute's reason code, builds a narrative
+ * from the structured fields (or uses the Comments field if populated),
+ * and re-runs analyseDispute().
+ */
+export async function openVrolUploadModal({ triggerId, dispute, channelId, messageTs }) {
+  const meta = JSON.stringify({
+    d: {
+      id: dispute.id,
+      pi: dispute.payment_intent,
+      amt: dispute.amount,
+      r: dispute.reason,
+      nrc: dispute.network_reason_code,
+    },
+    c: channelId,
+    t: messageTs,
+  });
+
+  await web().views.open({
+    trigger_id: triggerId,
+    view: {
+      type: 'modal',
+      callback_id: 'upload_vrol_submitted',
+      private_metadata: meta,
+      title: { type: 'plain_text', text: 'Upload VROL' },
+      submit: { type: 'plain_text', text: 'Parse & Re-analyse' },
+      close: { type: 'plain_text', text: 'Cancel' },
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'Upload the *Visa Resolve Online (VROL) PDF* from the issuing bank. The agent will extract the network reason code + customer narrative, override the (often inaccurate) Stripe webhook reason code with the VROL value, and re-run the dispute analysis.',
+          },
+        },
+        { type: 'divider' },
+        {
+          type: 'input',
+          block_id: 'vrol_block',
+          label: { type: 'plain_text', text: 'VROL PDF' },
+          element: {
+            type: 'file_input',
+            action_id: 'vrol_input',
+            filetypes: ['pdf'],
+            max_files: 1,
+          },
+        },
+      ],
+    },
+  });
+}
+
+/**
  * Upload a PDF buffer as a file in the dispute's Slack thread. Used by the
  * evidence-upload submission handler to deliver the regenerated merchant
  * response PDF (Tyler retro #8, sub-commit 3).

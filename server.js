@@ -12,12 +12,14 @@ import {
   postFollowUp,
   postError as postSlackError,
   openNarrativeModal,
+  openVrolUploadModal,
   openEvidenceUploadModal,
   uploadEvidencePdf,
   updateDisputeReview,
   updateDisputeReviewByCoords,
   decodeModalMetadata,
 } from './integrations/slack.js';
+import { parseVrolPdf } from './integrations/vrol_parser.js';
 import { decodeButtonValue } from './agent/decision.js';
 import { generateEvidence } from './evidence/generator.js';
 
@@ -133,6 +135,132 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     if (messageTs || state.message_ts) {
       await postFollowUp(messageTs || state.message_ts, `:x: Error submitting evidence: ${err.message}`);
     }
+  }
+});
+
+// --- Upload VROL flow (Tyler retro #10) ---
+//
+// 1. User clicks "Upload VROL" on a dispute review message
+// 2. We open a modal with a file_input element accepting a single PDF
+// 3. User uploads the Visa Resolve Online questionnaire from the issuer
+// 4. We fetch the PDF, parse out the reason code + narrative via
+//    integrations/vrol_parser.js, override the dispute's
+//    network_reason_code with the VROL value (VROL is authoritative —
+//    Stripe webhook reason codes are often inaccurate), and re-run
+//    analyseDispute() with the parsed narrative.
+// 5. The existing Slack dispute message is updated in place with the
+//    refreshed analysis.
+
+slackApp.action('upload_vrol', async ({ action, ack, body }) => {
+  await ack();
+  const { dispute, messageTs, channelId } = actionContext(action, body);
+  if (!dispute?.id) {
+    console.error('[server] upload_vrol: bad button payload', action.value);
+    return;
+  }
+  try {
+    await openVrolUploadModal({
+      triggerId: body.trigger_id,
+      dispute,
+      channelId,
+      messageTs,
+    });
+  } catch (err) {
+    console.error(`[server] Failed to open VROL upload modal for ${dispute.id}:`, err);
+  }
+});
+
+slackApp.view('upload_vrol_submitted', async ({ ack, body, view }) => {
+  await ack();
+
+  const meta = decodeModalMetadata(view.private_metadata);
+  if (!meta?.dispute?.id) {
+    console.error('[server] vrol submission: failed to decode private_metadata', view.private_metadata);
+    return;
+  }
+  const { dispute, channelId, messageTs } = meta;
+
+  const files = view.state.values?.vrol_block?.vrol_input?.files || [];
+  if (files.length === 0) {
+    console.warn(`[server] No VROL uploaded for ${dispute.id}`);
+    try {
+      await postFollowUp(messageTs, ':warning: No VROL was attached. Click *Upload VROL* again to retry.');
+    } catch {}
+    return;
+  }
+
+  const file = files[0];
+  console.log(`[server] VROL upload: ${dispute.id} — ${file.name} by user ${body.user?.id}`);
+
+  try {
+    // Fetch the PDF from Slack (requires files:read scope on the bot).
+    const url = file.url_private_download || file.url_private;
+    if (!url) throw new Error('VROL file has no download URL');
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
+    });
+    if (!resp.ok) throw new Error(`Failed to fetch VROL from Slack: HTTP ${resp.status}`);
+    const pdfBuffer = Buffer.from(await resp.arrayBuffer());
+
+    // Parse the VROL.
+    const parsed = await parseVrolPdf(pdfBuffer);
+    console.log(
+      `[server] VROL parsed for ${dispute.id}: case=${parsed.caseNumber}, reasonCode=${parsed.reasonCode}, narrative_len=${parsed.narrative?.length}`
+    );
+
+    if (!parsed.reasonCode) {
+      try {
+        await postFollowUp(
+          messageTs,
+          ':warning: Could not extract a reason code from the VROL PDF. The agent will re-run analysis using the original webhook reason code plus the extracted narrative.'
+        );
+      } catch {}
+    }
+
+    // Override the dispute's reason code with the VROL value (authoritative).
+    const overriddenDispute = {
+      ...dispute,
+      network_reason_code: parsed.reasonCode || dispute.network_reason_code,
+    };
+
+    // Re-run analysis with the parsed narrative attached.
+    const result = await analyseDispute(overriddenDispute, { narrative: parsed.narrative });
+    if (!result.booking) {
+      throw new Error(`Booking lookup failed during VROL re-analysis for ${overriddenDispute.payment_intent}`);
+    }
+
+    await updateDisputeReviewByCoords({
+      channelId,
+      messageTs,
+      analysis: result.analysis,
+      dispute: overriddenDispute,
+      booking: result.booking,
+      allContacts: result.allContacts,
+      messages: result.messages,
+      narrative: parsed.narrative,
+    });
+
+    const codeBefore = dispute.network_reason_code || '(none)';
+    const codeAfter = parsed.reasonCode || codeBefore;
+    const codeNote = codeBefore === codeAfter
+      ? `Reason code unchanged at \`${codeAfter}\` (VROL agrees with webhook).`
+      : `Reason code corrected from \`${codeBefore}\` → \`${codeAfter}\` per VROL.`;
+
+    await postFollowUp(
+      messageTs,
+      `:white_check_mark: *VROL parsed and re-analysed.* ${codeNote}` +
+        (parsed.caseNumber ? `\nVROL case number: \`${parsed.caseNumber}\`` : '') +
+        (parsed.comments
+          ? `\n_Cardholder comments captured from VROL Comments field._`
+          : `\n_VROL Comments field empty — narrative synthesised from structured fields (typical for 12.x processing-error cases)._`)
+    );
+
+    console.log(`[server] VROL re-analysis complete for ${dispute.id}`);
+  } catch (err) {
+    console.error(`[server] VROL processing failed for ${dispute.id}:`, err);
+    try {
+      await postFollowUp(messageTs, `:x: VROL processing failed: ${err.message}`);
+    } catch {}
   }
 });
 

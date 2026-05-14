@@ -418,6 +418,12 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       },
       {
         type: 'button',
+        text: { type: 'plain_text', text: 'Upload VROL' },
+        action_id: 'upload_vrol',
+        value: buttonPayload,
+      },
+      {
+        type: 'button',
         text: { type: 'plain_text', text: 'Upload Evidence' },
         action_id: 'upload_evidence',
         value: buttonPayload,
