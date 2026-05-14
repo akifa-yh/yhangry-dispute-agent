@@ -232,12 +232,19 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
           block_id: 'descriptions_block',
           optional: true,
           label: { type: 'plain_text', text: 'Descriptions (optional)' },
-          hint: { type: 'plain_text', text: 'One description per line, in upload order. Blank lines fall back to the filename. e.g. "Cardholder admission email — 10 May 2026"' },
+          hint: {
+            type: 'plain_text',
+            text: 'One per line, in upload order. Use ":" or "—" to split the document name from what it proves. Example: "Cardholder admission email: Customer admits dispute was filed in error". Blank lines fall back to filename.',
+          },
           element: {
             type: 'plain_text_input',
             action_id: 'descriptions_input',
             multiline: true,
             max_length: 2000,
+            placeholder: {
+              type: 'plain_text',
+              text: 'e.g.\nPayment receipt: £520 GBP authorised and charged\nCardholder admission email: Customer admits dispute was filed in error\nBooking confirmation: £520 booking accepted by cardholder',
+            },
           },
         },
       ],

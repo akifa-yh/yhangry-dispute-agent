@@ -33,7 +33,7 @@ function shouldEmbedCheckoutScreenshot(dispute) {
   return CLICK_TO_ACCEPT_CODES.has(`${inferDisputeNetwork(dispute)}:${code}`);
 }
 
-function drawCheckoutScreenshotPage(doc) {
+function drawCheckoutScreenshotPage(doc, letter) {
   const imgPath = path.join(__dirname, '..', 'assets', 'checkout-click-to-accept.jpeg');
   if (!fs.existsSync(imgPath)) {
     console.warn('[evidence] checkout-click-to-accept.jpeg missing — skipping screenshot page');
@@ -41,8 +41,8 @@ function drawCheckoutScreenshotPage(doc) {
   }
   doc.addPage();
   exhibitHeading(doc,
-    'yhangry Checkout — Click-to-Accept Disclosure',
-    'Booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.'
+    letter ? `Exhibit ${letter}` : 'yhangry Checkout — Click-to-Accept Disclosure',
+    'yhangry checkout screenshot — booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance required before payment.'
   );
   doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
 }
@@ -264,6 +264,84 @@ function shouldIncludePlatformMessages(dispute) {
   return true;
 }
 
+// Split a free-text exhibit description into a document name and a
+// "what it proves" clause. Accepts multiple separator styles so ops can
+// use whatever's easiest to type:
+//   1. em-dash with spaces: "Receipt — £520 GBP charged"
+//   2. double-hyphen with spaces: "Receipt -- £520 GBP charged"
+//   3. colon with space: "Receipt: £520 GBP charged"
+// If none match, the whole text becomes the document name and proves is
+// empty. The modal hint tells ops about these formats.
+function splitExhibitDescription(text) {
+  const s = (text || '').trim();
+  if (!s) return { document: '', proves: '' };
+  const patterns = [
+    /^(.+?)\s+—\s+(.+)$/,   // em-dash
+    /^(.+?)\s+--\s+(.+)$/,  // double-hyphen
+    /^(.+?):\s+(.+)$/,      // colon
+  ];
+  for (const p of patterns) {
+    const m = s.match(p);
+    if (m) return { document: m[1].trim(), proves: m[2].trim() };
+  }
+  return { document: s, proves: '' };
+}
+
+// Build the unified list of exhibits that will appear in this PDF, in
+// render order. Each item is given a sequential letter (A, B, C, ...) and
+// the same letter is used both in the page-1 Evidence table and on the
+// exhibit's own page header.
+//
+// Order:
+//   1. Platform messages (when included)
+//   2. Click-to-accept screenshot (when applicable)
+//   3. Inbound contact log (when present)
+//   4. User-uploaded exhibits
+function buildAttachedExhibitList({ dispute, platformMessages, allContacts, exhibits }) {
+  const items = [];
+
+  if (shouldIncludePlatformMessages(dispute) && platformMessages && platformMessages.length > 0) {
+    items.push({
+      kind: 'platform_messages',
+      document: 'Platform messages',
+      proves: `${platformMessages.length} chef↔customer messages on the yhangry platform around the booking.`,
+    });
+  }
+
+  if (shouldEmbedCheckoutScreenshot(dispute)) {
+    items.push({
+      kind: 'checkout',
+      document: 'yhangry checkout screenshot',
+      proves: 'Booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance is required before payment.',
+    });
+  }
+
+  if (allContacts && allContacts.length > 0) {
+    items.push({
+      kind: 'contact_log',
+      document: 'Inbound contact log',
+      proves: `${allContacts.length} inbound contact attempts across Aircall, Bird, and Conduit channels from event date onwards.`,
+    });
+  }
+
+  (exhibits || []).forEach((ex) => {
+    if (!ex?.source) return;
+    const { document, proves } = splitExhibitDescription(ex.description || '');
+    items.push({
+      kind: 'user_upload',
+      document: document || 'Uploaded evidence',
+      proves,
+      source: ex.source,
+    });
+  });
+
+  items.forEach((it, i) => {
+    it.letter = String.fromCharCode(65 + i); // A, B, C, ...
+  });
+
+  return items;
+}
+
 function drawBottomLineCallout(doc, callout) {
   const tones = {
     'strong':    { bg: GREEN_BG, border: GREEN_DARK, text: GREEN_DARK },
@@ -428,74 +506,59 @@ function drawCompactTimeline(doc, analysis, dispute, booking) {
   doc.y += 12;
 }
 
-function drawCompactEvidenceIndex(doc, analysis) {
-  drawSectionHeading(doc, 'Evidence to include');
+// Render the page-1 Evidence table. Each row corresponds to one of the
+// attached exhibits that appears later in the PDF — letters in the table
+// match the letters on the exhibit page headers.
+//
+// Format: 3 columns matching the user-approved Katie Robertson reference:
+//   Exhibit | Document | Proves
+function drawEvidenceTable(doc, attachedExhibits) {
+  drawSectionHeading(doc, 'Evidence');
 
-  const items = sortEvidenceForRender(
-    (analysis.evidence_to_include || []).map(normaliseEvidence)
-  );
-
-  if (items.length === 0) {
+  if (!attachedExhibits || attachedExhibits.length === 0) {
     doc.fontSize(9).font('Helvetica-Oblique').fillColor(GREY_TEXT)
-      .text('No specific evidence items recommended.', 50, doc.y, { width: 495 });
+      .text('No exhibits attached. Use the "Upload Evidence" button on the Slack dispute review to attach supporting documents.', 50, doc.y, { width: 495 });
     doc.fillColor('#000000');
     doc.y += 14;
     return;
   }
 
-  // Find the star — first PRIMARY+HIGH item, used in the BOTTOM-LINE callout
-  const starIndex = items.findIndex(e =>
-    e.strategic_priority === 'PRIMARY' && e.independence_score === 'HIGH'
-  );
-
   const x0 = 50, w = 495;
+  const colExhibit = 50;   // "Exhibit A" fits in ~50pt
+  const colDocument = 165; // ~165pt for the document name
+  const colProves = w - colExhibit - colDocument;
 
   // Header row
   const headerY = doc.y;
   doc.rect(x0, headerY, w, 18).fill(NAVY);
   doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold');
-  doc.text('#', x0 + 6, headerY + 5, { width: 14 });
-  doc.text('PRIORITY', x0 + 22, headerY + 5, { width: 55 });
-  doc.text('INDEPENDENCE', x0 + 78, headerY + 5, { width: 50 });
-  doc.text('EVIDENCE', x0 + 132, headerY + 5, { width: w - 138 });
+  doc.text('EXHIBIT', x0 + 6, headerY + 5, { width: colExhibit - 12 });
+  doc.text('DOCUMENT', x0 + colExhibit, headerY + 5, { width: colDocument - 6 });
+  doc.text('PROVES', x0 + colExhibit + colDocument, headerY + 5, { width: colProves - 6 });
   doc.fillColor('#000000');
   doc.y = headerY + 18;
 
-  // Data rows — show all items in compact form (no rationale text)
-  items.forEach((item, i) => {
-    const isStarRow = i === starIndex;
+  attachedExhibits.forEach((item, i) => {
     const rowMinH = 22;
     checkPageSpace(doc, rowMinH + 6);
 
-    // Measure evidence text height
+    // Measure tallest of the two text columns to set row height
     doc.fontSize(8).font('Helvetica');
-    const evidenceH = doc.heightOfString(item.evidence || '', { width: w - 138 - 6 });
-    const rowH = Math.max(rowMinH, evidenceH + 10);
+    const docH = doc.heightOfString(item.document || '', { width: colDocument - 12 });
+    const provesH = doc.heightOfString(item.proves || '', { width: colProves - 12 });
+    const rowH = Math.max(rowMinH, Math.max(docH, provesH) + 10);
 
     const rowY = doc.y;
-    const bgColor = isStarRow ? '#FFF8E1' : (i % 2 === 0 ? GREY_BG : '#FFFFFF');
-    doc.rect(x0, rowY, w, rowH).fill(bgColor);
+    doc.rect(x0, rowY, w, rowH).fill(i % 2 === 0 ? GREY_BG : '#FFFFFF');
     doc.lineWidth(0.5).strokeColor(GREY_BORDER).rect(x0, rowY, w, rowH).stroke();
 
-    // Number (with star if applicable)
     doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
-      .text(isStarRow ? `${i + 1}` : `${i + 1}`, x0 + 6, rowY + 6, { width: 14 });
-
-    // Priority badge
-    if (item.strategic_priority) {
-      const pb = PRIORITY_BADGE[item.strategic_priority];
-      if (pb) drawBadge(doc, x0 + 22, rowY + 5, pb);
-    }
-
-    // Independence badge
-    if (item.independence_score) {
-      const ib = INDEPENDENCE_BADGE[item.independence_score];
-      if (ib) drawBadge(doc, x0 + 78, rowY + 5, ib);
-    }
-
-    // Evidence text
-    doc.fillColor('#000000').fontSize(8).font('Helvetica')
-      .text(item.evidence || '', x0 + 132, rowY + 5, { width: w - 138 });
+      .text(item.letter, x0 + 6, rowY + 6, { width: colExhibit - 12 });
+    doc.fontSize(8).font('Helvetica')
+      .text(item.document || '', x0 + colExhibit, rowY + 6, { width: colDocument - 6 });
+    doc.fillColor(GREY_TEXT).fontSize(8).font('Helvetica')
+      .text(item.proves || '', x0 + colExhibit + colDocument, rowY + 6, { width: colProves - 6 });
+    doc.fillColor('#000000');
 
     doc.y = rowY + rowH;
   });
@@ -668,55 +731,43 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // Compact timeline
   drawCompactTimeline(doc, analysis, dispute, booking);
 
-  // Evidence index (with on the row featured in the BOTTOM-LINE callout)
-  drawCompactEvidenceIndex(doc, analysis);
+  // Build the unified list of attached exhibits in render order. Letters
+  // assigned here are reused on each exhibit's page header so the page-1
+  // Evidence table corresponds exactly to what the reviewer sees later.
+  const attachedExhibits = buildAttachedExhibitList({
+    dispute, platformMessages, allContacts, exhibits,
+  });
 
-  // ===== PAGE 2+: Platform Messages (Chat Bubbles) =====
-  // Skipped for 12.x processing-error codes where the chat content is
-  // irrelevant to amount/currency disputes (retro #8 fix, 2026-05-14).
-  if (shouldIncludePlatformMessages(dispute)) {
-    doc.addPage();
-    exhibitHeading(doc,
-      `Platform Messages — yhangry Booking #${analysis.booking_id || booking.order_id}`,
-      'Messages between chef and customer on the yhangry platform'
-    );
+  // Page-1 Evidence table — lists actual attached exhibits with letters
+  drawEvidenceTable(doc, attachedExhibits);
 
-    if (platformMessages && platformMessages.length > 0) {
+  // ===== Exhibit pages =====
+  // Iterate the unified list and render each section using its assigned
+  // letter. This guarantees the page-1 table and the page headers stay
+  // in sync.
+  for (const item of attachedExhibits) {
+    if (item.kind === 'platform_messages') {
+      doc.addPage();
+      exhibitHeading(doc,
+        `Exhibit ${item.letter}`,
+        `Platform Messages — yhangry Booking #${analysis.booking_id || booking.order_id} — messages between chef and customer`
+      );
       for (const m of platformMessages) {
         drawChatBubble(doc, m);
       }
-    } else {
-      doc.fontSize(9).font('Helvetica').text('No platform messages available.');
+    } else if (item.kind === 'checkout') {
+      drawCheckoutScreenshotPage(doc, item.letter);
+    } else if (item.kind === 'contact_log') {
+      doc.addPage();
+      exhibitHeading(doc,
+        `Exhibit ${item.letter}`,
+        `Inbound Contact Log — customer phone ${booking.customer_phone || 'n/a'}, all channels from event date onwards`
+      );
+      drawCallLogTable(doc, allContacts);
+    } else if (item.kind === 'user_upload') {
+      const subtitle = item.proves ? `${item.document} — ${item.proves}` : item.document;
+      drawImageExhibitPage(doc, { label: item.letter, description: subtitle, source: item.source });
     }
-  }
-
-  // ===== Click-to-Accept Screenshot (Visa 13.3/13.5/13.6/13.7, MC 4853/4860) =====
-  if (shouldEmbedCheckoutScreenshot(dispute)) {
-    drawCheckoutScreenshotPage(doc);
-  }
-
-  // ===== Contact Log (Aircall / Bird / Conduit) =====
-  if (allContacts && allContacts.length > 0) {
-    doc.addPage();
-    exhibitHeading(doc,
-      'Inbound Contact Log',
-      `Customer phone: ${booking.customer_phone || 'n/a'} | All channels from event date onwards`
-    );
-    drawCallLogTable(doc, allContacts);
-  }
-
-  // ===== User-uploaded exhibits (Tyler retro #8 sub-commit 2) =====
-  // Each exhibit becomes its own page. Labels auto-assigned A, B, C... if
-  // not provided. Populated by the Slack "Upload Evidence" flow (sub-commit 3).
-  const exhibitList = Array.isArray(exhibits) ? exhibits : [];
-  for (let i = 0; i < exhibitList.length; i++) {
-    const ex = exhibitList[i] || {};
-    if (!ex.source) {
-      console.warn(`[evidence] Skipping exhibit at index ${i} — no source`);
-      continue;
-    }
-    const label = ex.label || String.fromCharCode(65 + i); // A, B, C, ...
-    drawImageExhibitPage(doc, { ...ex, label });
   }
 
   doc.end();
