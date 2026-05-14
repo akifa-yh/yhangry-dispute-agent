@@ -8,11 +8,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ============================================================================
 // Click-to-Accept screenshot helpers (Tyler retro #4)
 // ============================================================================
-// Codes where click-to-accept (T&Cs, cancellation policy, stored-payment
-// authorisation) is required evidence per the matrix. For these we embed the
-// yhangry checkout screenshot as a page, since per-user timestamped
-// acceptance isn't yet captured on the booking record.
+// Codes where the yhangry checkout screenshot is required evidence per the
+// matrix. For 13.x and MC 4853/4860 it proves click-to-accept on T&Cs /
+// cancellation policy. For 12.x (processing-error codes added in retro #9)
+// it doubles as currency_disclosure_at_checkout — proving the merchant-
+// currency price was shown to the customer pre-payment.
 const CLICK_TO_ACCEPT_CODES = new Set([
+  'visa:12.3', 'visa:12.5', 'visa:12.6.1', 'visa:12.6.2',
   'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
   'mastercard:4853', 'mastercard:4860',
 ]);
@@ -43,6 +45,30 @@ function drawCheckoutScreenshotPage(doc) {
     'Booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.'
   );
   doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
+}
+
+// Generic exhibit-page helper for user-uploaded images. Each exhibit becomes
+// its own page with an "Exhibit <label>" header and the image embedded at
+// fit-to-page. Tyler retro #8 sub-commit 2.
+//
+// `exhibit.source` can be:
+//   - a Buffer (e.g. fetched from Slack file URL by the upload handler)
+//   - an absolute file path
+//   - anything else pdfkit's doc.image() accepts (readable streams)
+function drawImageExhibitPage(doc, exhibit) {
+  doc.addPage();
+  exhibitHeading(doc,
+    `Exhibit ${exhibit.label}`,
+    exhibit.description || ''
+  );
+  try {
+    doc.image(exhibit.source, 50, doc.y, { fit: [495, 640], align: 'center' });
+  } catch (err) {
+    console.warn(`[evidence] Failed to embed exhibit ${exhibit.label}:`, err.message);
+    doc.fontSize(9).font('Helvetica-Oblique').fillColor(GREY_TEXT)
+      .text(`(Failed to embed image: ${err.message})`, 50, doc.y, { width: 495 });
+    doc.fillColor('#000000');
+  }
 }
 
 // ============================================================================
@@ -560,7 +586,23 @@ function drawCallLogTable(doc, contacts) {
 // Main entry point
 // ============================================================================
 
-export async function generateEvidence({ analysis, dispute, booking, platformMessages, allContacts }) {
+/**
+ * Generate the merchant response PDF.
+ *
+ * @param {object} args
+ * @param {object} args.analysis - Gemini analysis JSON
+ * @param {object} args.dispute - Stripe dispute object
+ * @param {object} args.booking - BigQuery booking row
+ * @param {Array<object>} args.platformMessages - chef/customer messages
+ * @param {Array<object>} args.allContacts - inbound contact attempts
+ * @param {Array<object>} [args.exhibits] - optional user-uploaded image
+ *   exhibits, each {label?, description?, source} where source is a Buffer
+ *   or file path. Labels auto-assigned A, B, C... if not provided. Tyler
+ *   retro #8 sub-commit 2 — populated by the Slack "Upload Evidence" flow
+ *   in sub-commit 3; safely empty/missing when called from the standard
+ *   "Approve & Generate Evidence" button.
+ */
+export async function generateEvidence({ analysis, dispute, booking, platformMessages, allContacts, exhibits }) {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const bufferPromise = collectBuffer(doc);
 
@@ -633,6 +675,20 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
       `Customer phone: ${booking.customer_phone || 'n/a'} | All channels from event date onwards`
     );
     drawCallLogTable(doc, allContacts);
+  }
+
+  // ===== User-uploaded exhibits (Tyler retro #8 sub-commit 2) =====
+  // Each exhibit becomes its own page. Labels auto-assigned A, B, C... if
+  // not provided. Populated by the Slack "Upload Evidence" flow (sub-commit 3).
+  const exhibitList = Array.isArray(exhibits) ? exhibits : [];
+  for (let i = 0; i < exhibitList.length; i++) {
+    const ex = exhibitList[i] || {};
+    if (!ex.source) {
+      console.warn(`[evidence] Skipping exhibit at index ${i} — no source`);
+      continue;
+    }
+    const label = ex.label || String.fromCharCode(65 + i); // A, B, C, ...
+    drawImageExhibitPage(doc, { ...ex, label });
   }
 
   doc.end();
