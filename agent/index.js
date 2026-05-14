@@ -179,6 +179,26 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     );
   }
 
+  // Step 5c: Pre-event detection (Tyler retro #7). If the dispute was filed
+  // BEFORE the event date, standard rebuttal logic doesn't apply — the
+  // complaint deadline argument can't bind (window still in the future) and
+  // service-rendered arguments are impossible (no service yet). The right
+  // strategy is CUSTOMER_CONTACT_FIRST: contact the customer to clarify
+  // intent, offer the booking change they likely wanted, request dispute
+  // withdrawal. Katie Robertson case (2026-05-02 → 2026-05-13) is the
+  // canonical example. Falls back to "now" when dispute.created is missing
+  // (e.g. local fixtures don't include it).
+  const disputeCreatedMs = dispute.created ? dispute.created * 1000 : Date.now();
+  const eventStartMs = DateTime.fromISO(eventDateStr, { zone: timezone })
+    .startOf('day')
+    .toMillis();
+  const isPreEvent = eventStartMs > disputeCreatedMs;
+  const daysUntilEvent = Math.ceil((eventStartMs - disputeCreatedMs) / 86_400_000);
+  const disputeCreatedIso = new Date(disputeCreatedMs).toISOString();
+  console.log(
+    `[agent] Pre-event check: dispute_created=${disputeCreatedIso} event=${eventDateStr} → isPreEvent=${isPreEvent}, daysUntilEvent=${daysUntilEvent}`
+  );
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -194,6 +214,9 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     platformMessages: messages,
     narrative,
     matrixEntry,
+    disputeCreatedIso,
+    isPreEvent,
+    daysUntilEvent,
   });
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);

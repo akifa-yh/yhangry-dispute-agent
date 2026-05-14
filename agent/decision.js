@@ -1,6 +1,7 @@
 const RECOMMENDATION_EMOJI = {
   STRONG_COUNTER: ':white_check_mark:',
   COUNTER_WITH_CAVEATS: ':warning:',
+  CUSTOMER_CONTACT_FIRST: ':envelope_with_arrow:',
   ESCALATE: ':red_circle:',
 };
 
@@ -234,6 +235,19 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     type: 'section',
     text: { type: 'mrkdwn', text: summaryLines.join('\n') },
   });
+
+  // Pre-event banner — when the dispute was filed BEFORE the event date,
+  // standard rebuttal logic doesn't apply. Make this impossible to miss:
+  // it overrides the "approve & generate evidence" instinct.
+  if (analysis.recommendation === 'CUSTOMER_CONTACT_FIRST') {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: ':rotating_light: *PRE-EVENT DISPUTE — DO NOT SUBMIT EVIDENCE YET.* The event has not yet taken place; the customer has likely filed the dispute in error (currency confusion, wanting a booking amendment, etc.). *Email the customer first* via `info@yhangry.com` to clarify intent and request they withdraw the dispute with their issuing bank. Submit a rebuttal only if they refuse and the event date passes.',
+      },
+    });
+  }
 
   // Pre-narrative banner — visible cue that ops can paste VROL to deepen analysis
   if (!narrativeProvided) {

@@ -374,6 +374,59 @@ Distinguish "no winning strategy" (ESCALATE) from "strategy exists but
 has gaps" (COUNTER_WITH_CAVEATS) from "clear winning strategy"
 (STRONG_COUNTER).
 
+PRE-EVENT DISPUTE HANDLING:
+The user message includes a PRE-EVENT CONTEXT block stating whether the
+dispute was filed BEFORE the booking's event date. When is_pre_event is
+TRUE, the standard rebuttal logic does NOT apply:
+
+- DEADLINE arguments don't bind — the complaint window is in the future
+  (you can't have missed a deadline that hasn't happened yet)
+- SERVICE_RENDERED can't apply — no service has been delivered yet
+- The dispute is almost always a customer error: currency confusion,
+  wanting to amend the booking (e.g. reduce guest count), mistakenly
+  thinking they cancelled, or filing a dispute when they meant to
+  contact support
+
+Required behaviour for pre-event disputes (non-fraud codes):
+1. Set rebuttal_strategy: PRE_EVENT_CONTACT
+2. Set recommendation: CUSTOMER_CONTACT_FIRST
+3. Set evidence_strength based on baseline booking-side exhibits we have
+   (payment_receipt, booking confirmation). Typically MODERATE.
+4. suggested_rebuttal_points should describe the CONTACT-CUSTOMER PLAN
+   in plain language, NOT adversarial rebuttal text. Examples:
+   - "Email customer via info@yhangry.com to clarify intent — they
+     likely meant to amend the booking rather than dispute."
+   - "Offer the booking change they wanted (guest reduction, refund,
+     reschedule)."
+   - "Request written confirmation they will withdraw the dispute
+     with their issuing bank."
+5. evidence_to_include: keep light — payment_receipt, booking
+   confirmation, T&Cs URL. The point is NOT to build a submission pack
+   yet; it's to support the eventual rebuttal if the customer refuses
+   to withdraw.
+6. evidence_weaknesses: only structural items — DO NOT speculate about
+   service issues that haven't happened. "Chef attendance UNCONFIRMED"
+   is NOT a weakness pre-event; it's structurally impossible to confirm.
+7. reasoning: open with "This is a pre-event dispute filed N days before
+   the scheduled event. The right next step is to contact the customer
+   directly, clarify their actual intent, offer the booking change they
+   may have wanted, and request they withdraw the dispute with their
+   issuer. Submit a rebuttal only if they refuse AND the event date passes."
+8. Add a flag: "PRE-EVENT — DO NOT submit evidence yet. Event is N days
+   away. Contact customer first."
+
+Override rules: PRE_EVENT_CONTACT trumps DEADLINE / SERVICE_RENDERED /
+CUSTOMER_INITIATED / CLAIM_BY_CLAIM when is_pre_event=true. Always pick
+PRE_EVENT_CONTACT regardless of what other signals say.
+
+Fraud-code exception: For Visa 10.4 / Mastercard 4837 / 4863 (cardholder
+denying authorisation), pre-event status does NOT change the strategy.
+The cardholder is alleging fraud, not a service/processing issue, so the
+appropriate counter is still proving the legitimate cardholder initiated
+the booking (CUSTOMER_INITIATED strategy). Pick STRONG_COUNTER /
+COUNTER_WITH_CAVEATS / ESCALATE as usual based on the customer's own
+platform engagement.
+
 PRODUCT GAP TAGGING:
 yhangry tracks recurring evidence gaps in product_gaps_identified[] so the
 team knows what product/data work would make future disputes easier to win.
@@ -449,9 +502,9 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
     }
   ],
   "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW",
-  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CLAIM_BY_CLAIM. This drives evidence ordering and the recommendation.",
+  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT. This drives evidence ordering and the recommendation. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code — see PRE-EVENT DISPUTE HANDLING rules above.",
   "evidence_strength": "STRONG | MODERATE | WEAK (reflects strength of the chosen strategy, not coverage across all claims)",
-  "recommendation": "STRONG_COUNTER | COUNTER_WITH_CAVEATS | ESCALATE",
+  "recommendation": "STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT.",
   "reasoning": "2-4 sentences summarising why, leading with the chosen rebuttal_strategy and the PRIMARY evidence supporting it. If narrative_provided is false, mark the recommendation as provisional.",
   "suggested_rebuttal_points": ["string"],
   "evidence_to_include": [
@@ -503,6 +556,9 @@ export function buildUserMessage({
   platformMessages,
   narrative,
   matrixEntry,
+  disputeCreatedIso,
+  isPreEvent,
+  daysUntilEvent,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
 
@@ -594,6 +650,12 @@ BOOKING DETAILS:
 - Chef marked ready: ${booking.is_chef_ready_response}
 - Chef marked on time: ${booking.is_chef_on_time_response}
 - Chef submitted post-booking payment survey: ${booking.chef_submitted_payment_survey || false}${booking.survey_chef_comment ? `\n- Chef survey comment: ${booking.survey_chef_comment}` : ''}
+
+PRE-EVENT CONTEXT:
+- Dispute filed (created): ${disputeCreatedIso || 'unknown'}
+- Event date: ${booking.event_date}
+- Days until event (from dispute filing): ${daysUntilEvent != null ? daysUntilEvent : 'unknown'}
+- is_pre_event: ${isPreEvent ? 'TRUE — apply PRE-EVENT DISPUTE HANDLING rules above (use PRE_EVENT_CONTACT strategy and CUSTOMER_CONTACT_FIRST recommendation unless this is a fraud code)' : 'FALSE — proceed with standard rebuttal logic'}
 
 DEADLINE:
 - Customer timezone: ${timezone}
