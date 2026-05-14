@@ -243,7 +243,8 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
             max_length: 2000,
             placeholder: {
               type: 'plain_text',
-              text: 'e.g.\nPayment receipt: £520 GBP authorised and charged\nCardholder admission email: Customer admits dispute was filed in error\nBooking confirmation: £520 booking accepted by cardholder',
+              // Slack's plain_text_input placeholder caps at 150 chars — keep short.
+              text: 'Receipt: £520 GBP charged\nAdmission email: customer admits error',
             },
           },
         },
