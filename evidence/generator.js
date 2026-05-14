@@ -177,13 +177,13 @@ const GREY_TEXT = '#555555';
 
 /**
  * Pick the strongest single point to feature in the BOTTOM-LINE callout.
- * Priority order:
- *   1. CUSTOMER_CONTACT_FIRST recommendation → pre-event banner
- *   2. LATE_COMPLAINT with measurable lateness → procedural argument
- *   3. NO_COMPLAINT_FOUND → procedural argument
- *   4. Chef survey submitted (CONFIRMED attendance) → service-rendered
- *   5. PRIMARY/HIGH evidence_to_include item → strongest evidence
- *   6. Fallback → reasoning summary
+ *
+ * Priority is dispute-code aware:
+ *   - CUSTOMER_CONTACT_FIRST recommendation → pre-event banner (always)
+ *   - 12.x processing-error codes → "no discrepancy" framing (NEVER the
+ *     deadline/attendance arguments, per matrix notes for retro #9)
+ *   - Everything else → procedural (late/no-complaint) > service-rendered >
+ *     PRIMARY/HIGH evidence > reasoning summary
  */
 function pickBottomLine(analysis, dispute, booking) {
   if (analysis.recommendation === 'CUSTOMER_CONTACT_FIRST') {
@@ -192,6 +192,19 @@ function pickBottomLine(analysis, dispute, booking) {
       headline: 'PRE-EVENT DISPUTE — CONTACT CUSTOMER FIRST',
       detail: `The event has not yet taken place (scheduled ${eventStr}). The customer has likely filed this dispute in error — currency confusion, wanting a booking amendment, etc. The right next step is to contact the customer directly to clarify intent, offer the booking change they may have wanted, and request they withdraw the dispute with their issuing bank. Submit a rebuttal only if they refuse and the event date passes.`,
       tone: 'pre-event',
+    };
+  }
+
+  // 12.x processing-error codes — currency / amount / duplicate / paid-by-
+  // other-means disputes. Matrix notes (retro #9) explicitly forbid leading
+  // with chef attendance or the complaint deadline; the relevant framing is
+  // "merchant-currency amount authorised = merchant-currency amount charged".
+  const code = String(dispute?.network_reason_code || '').trim();
+  if (/^12\.\d/.test(code)) {
+    return {
+      headline: 'NO AMOUNT DISCREPANCY — MERCHANT-CURRENCY AUTHORISED = MERCHANT-CURRENCY CHARGED',
+      detail: 'The cardholder authorised the exact amount that was charged, in the merchant\'s billing currency, at checkout. Any difference the cardholder observes on their bank statement is the issuing bank\'s foreign-exchange conversion to their home currency — a bank-side action, not merchant pricing. yhangry\'s pricing is denominated and disclosed in the merchant currency throughout the booking and checkout flow (see embedded checkout screenshot).',
+      tone: 'strong',
     };
   }
 
@@ -240,6 +253,17 @@ function pickBottomLine(analysis, dispute, booking) {
   };
 }
 
+// Whether to include the chef↔customer chat history in the merchant
+// response PDF. For 12.x processing-error codes the conversation is
+// irrelevant (amount/currency disputes turn on the receipt, not the menu
+// chat). For 13.x (not-as-described) and fraud codes the chat is directly
+// material — it proves engagement, service description agreement, etc.
+function shouldIncludePlatformMessages(dispute) {
+  const code = String(dispute?.network_reason_code || '').trim();
+  if (/^12\.\d/.test(code)) return false;
+  return true;
+}
+
 function drawBottomLineCallout(doc, callout) {
   const tones = {
     'strong':    { bg: GREEN_BG, border: GREEN_DARK, text: GREEN_DARK },
@@ -254,7 +278,7 @@ function drawBottomLineCallout(doc, callout) {
 
   // Measure heights
   doc.fontSize(11).font('Helvetica-Bold');
-  const headlineH = doc.heightOfString(`★ ${callout.headline}`, { width: w - padding * 2 });
+  const headlineH = doc.heightOfString(`${callout.headline}`, { width: w - padding * 2 });
   doc.fontSize(9).font('Helvetica');
   const detailH = doc.heightOfString(callout.detail, { width: w - padding * 2 });
   const totalH = padding + headlineH + 4 + detailH + padding;
@@ -264,7 +288,7 @@ function drawBottomLineCallout(doc, callout) {
   doc.lineWidth(1);
 
   doc.fillColor(t.text).fontSize(11).font('Helvetica-Bold')
-    .text(`★ ${callout.headline}`, x + padding, startY + padding, { width: w - padding * 2 });
+    .text(`${callout.headline}`, x + padding, startY + padding, { width: w - padding * 2 });
 
   doc.fillColor('#000000').fontSize(9).font('Helvetica')
     .text(callout.detail, x + padding, doc.y + 2, { width: w - padding * 2 });
@@ -432,7 +456,7 @@ function drawCompactEvidenceIndex(doc, analysis) {
   doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold');
   doc.text('#', x0 + 6, headerY + 5, { width: 14 });
   doc.text('PRIORITY', x0 + 22, headerY + 5, { width: 55 });
-  doc.text('SOURCE', x0 + 78, headerY + 5, { width: 50 });
+  doc.text('INDEPENDENCE', x0 + 78, headerY + 5, { width: 50 });
   doc.text('EVIDENCE', x0 + 132, headerY + 5, { width: w - 138 });
   doc.fillColor('#000000');
   doc.y = headerY + 18;
@@ -455,7 +479,7 @@ function drawCompactEvidenceIndex(doc, analysis) {
 
     // Number (with star if applicable)
     doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
-      .text(isStarRow ? `★${i + 1}` : `${i + 1}`, x0 + 6, rowY + 6, { width: 14 });
+      .text(isStarRow ? `${i + 1}` : `${i + 1}`, x0 + 6, rowY + 6, { width: 14 });
 
     // Priority badge
     if (item.strategic_priority) {
@@ -611,7 +635,7 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // The whole story in one scannable page: header → green BOTTOM-LINE
   // callout → 4-cell facts grid → 3-bullet rebuttal → compact timeline →
   // evidence index with ★-marked strongest item. Designed for a Stripe/bank
-  // reviewer's 30-second scan; the ★ exhibit appears highlighted in gold.
+  // reviewer's 30-second scan; the exhibit appears highlighted in gold.
 
   const customerName = `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || 'Cardholder';
 
@@ -644,22 +668,26 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // Compact timeline
   drawCompactTimeline(doc, analysis, dispute, booking);
 
-  // Evidence index (with ★ on the row featured in the BOTTOM-LINE callout)
+  // Evidence index (with on the row featured in the BOTTOM-LINE callout)
   drawCompactEvidenceIndex(doc, analysis);
 
   // ===== PAGE 2+: Platform Messages (Chat Bubbles) =====
-  doc.addPage();
-  exhibitHeading(doc,
-    `Platform Messages — yhangry Booking #${analysis.booking_id || booking.order_id}`,
-    'Messages between chef and customer on the yhangry platform'
-  );
+  // Skipped for 12.x processing-error codes where the chat content is
+  // irrelevant to amount/currency disputes (retro #8 fix, 2026-05-14).
+  if (shouldIncludePlatformMessages(dispute)) {
+    doc.addPage();
+    exhibitHeading(doc,
+      `Platform Messages — yhangry Booking #${analysis.booking_id || booking.order_id}`,
+      'Messages between chef and customer on the yhangry platform'
+    );
 
-  if (platformMessages && platformMessages.length > 0) {
-    for (const m of platformMessages) {
-      drawChatBubble(doc, m);
+    if (platformMessages && platformMessages.length > 0) {
+      for (const m of platformMessages) {
+        drawChatBubble(doc, m);
+      }
+    } else {
+      doc.fontSize(9).font('Helvetica').text('No platform messages available.');
     }
-  } else {
-    doc.fontSize(9).font('Helvetica').text('No platform messages available.');
   }
 
   // ===== Click-to-Accept Screenshot (Visa 13.3/13.5/13.6/13.7, MC 4853/4860) =====
