@@ -40,6 +40,9 @@
  *   customer_initiated_booking_proof  (customer's own platform actions)
  *   refund_processed_proof
  *   cancellation_timing_record
+ *   payment_receipt                   (receipt/charge record in merchant currency)
+ *   currency_disclosure_at_checkout   (proof customer saw merchant-currency price pre-payment)
+ *   customer_admission                (written cardholder admission the dispute was filed in error)
  *
  * CHANGE LOG — keep updated when entries are revised:
  *   2026-04-29 — initial seed (Visa 10.4/13.1/13.3/13.5/13.6/13.7 +
@@ -52,6 +55,13 @@
  *                Tightened 4855 description to "Transaction Did Not
  *                Complete" per Stripe's category mapping
  *                (https://docs.stripe.com/disputes/categories#network-code-map).
+ *   2026-05-14 — added Visa 12.3 / 12.5 / 12.6.1 / 12.6.2 processing-error
+ *                codes (Tyler retro #9). Katie Robertson case (2026-05-02)
+ *                was a Visa 12.5 that fell back to general rules — agent
+ *                suggested a chef-attendance/deadline rebuttal which is
+ *                irrelevant for a currency-conversion dispute. New
+ *                canonical types: payment_receipt,
+ *                currency_disclosure_at_checkout, customer_admission.
  */
 
 // ============================================================================
@@ -97,6 +107,175 @@ const visa_10_4 = {
 
   notes:
     'Fraud codes are rare for yhangry but can be devastating when they hit. The strongest counter-evidence is the customer\'s OWN platform engagement before/during/after the booking — a fraudster typically would not engage in detailed menu negotiations. Look for customer-sent messages, profile activity, and post-event acknowledgement. AVS/CVV evidence sits in Stripe but we do not currently pull it into the agent — flag this if a 10.4 comes through.',
+};
+
+// ----------------------------------------------------------------------------
+// VISA 12.x — PROCESSING ERROR CODES
+// ----------------------------------------------------------------------------
+// 12.x disputes are about HOW the transaction was processed (wrong amount,
+// wrong currency, duplicate, paid by other means) — NOT about service quality
+// or attendance. The rebuttal playbook is fundamentally different from 13.x:
+//   - DO NOT lead with chef attendance (irrelevant)
+//   - DO NOT lead with the complaint deadline (disputes can be filed pre-event)
+//   - DO lead with: amount/currency authorised at checkout = amount/currency charged
+//   - DO frame any cardholder-statement discrepancy as issuer-side FX conversion
+//   - DO surface customer_admission emails (when present) as the BOTTOM LINE
+
+const visa_12_3 = {
+  network: 'visa',
+  reason_code: '12.3',
+  label: 'Processing Error — Incorrect Currency',
+  description:
+    "Cardholder claims the transaction was processed in the wrong currency. For yhangry this is rare — pricing is consistently GBP for UK bookings and USD for US bookings — but can arise when a customer expected one currency and was charged in another. Counter-evidence focuses on showing the agreed-upon currency was disclosed at checkout and matches the charged currency.",
+
+  common_claims: [
+    'charged_in_wrong_currency',
+    'currency_misrepresentation_at_checkout',
+    'expected_different_currency',
+  ],
+
+  required_evidence: [
+    'payment_receipt',
+    'agreed_service_description',
+    'currency_disclosure_at_checkout',
+  ],
+
+  strengthening_evidence: [
+    'customer_initiated_booking_proof',
+    'customer_admission',
+  ],
+
+  yhangry_evidence_sources: {
+    payment_receipt:
+      'Stripe charge record + yhangry receipt showing the exact amount and currency authorised. ALWAYS include for 12.x codes.',
+    agreed_service_description:
+      'Booking confirmation email showing the price in the merchant\'s billing currency. ALWAYS include for 12.x codes.',
+    currency_disclosure_at_checkout:
+      'yhangry checkout displays pricing in the merchant\'s billing currency throughout. Include the checkout screenshot (assets/checkout-click-to-accept.jpeg) — same asset used for 13.x click-to-accept.',
+    customer_initiated_booking_proof:
+      'Platform messages from customer engaging with the booking before payment.',
+    customer_admission:
+      'Email correspondence (from info@yhangry.com inbox) where the customer acknowledges the confusion. STRONGEST possible evidence for 12.x — surface in the merchant response callout.',
+  },
+
+  notes:
+    'Rare for yhangry. NEVER lead with the deadline argument or chef attendance — this is a pricing/currency dispute, not service or timing. Focus rebuttal on: (1) the currency disclosed at checkout matches the currency charged; (2) any difference the cardholder sees on their statement is the issuer\'s FX conversion to their home currency, which is a bank-side action not a merchant pricing decision.',
+};
+
+const visa_12_5 = {
+  network: 'visa',
+  reason_code: '12.5',
+  label: 'Processing Error — Incorrect Amount',
+  description:
+    "Cardholder claims the merchant charged an incorrect amount. For yhangry this typically arises from currency-conversion confusion: customer pays an invoice in GBP, sees the post-conversion USD/EUR amount on their bank statement, and disputes the difference. The merchant's job is to show the amount authorised at checkout matches the amount charged in the merchant's billing currency, and any inter-currency discrepancy is the issuer's FX conversion (not merchant pricing).",
+
+  common_claims: [
+    'amount_charged_does_not_match_authorization',
+    'currency_conversion_dispute',
+    'pricing_misunderstanding',
+    'unexpected_statement_amount',
+  ],
+
+  required_evidence: [
+    'payment_receipt',
+    'agreed_service_description',
+    'currency_disclosure_at_checkout',
+  ],
+
+  strengthening_evidence: [
+    'customer_initiated_booking_proof',
+    'customer_admission',
+  ],
+
+  yhangry_evidence_sources: {
+    payment_receipt:
+      'yhangry receipt + Stripe charge record showing the exact amount in merchant currency (e.g. £520.00 GBP) authorised and charged. ALWAYS include.',
+    agreed_service_description:
+      'Booking confirmation email showing "Total cost" and "Amount paid" in merchant currency. ALWAYS include.',
+    currency_disclosure_at_checkout:
+      'yhangry checkout displays merchant-currency pricing throughout. Include the checkout screenshot (assets/checkout-click-to-accept.jpeg).',
+    customer_initiated_booking_proof:
+      'Platform messages from customer pre-payment showing engagement with the booking.',
+    customer_admission:
+      'Email correspondence where the customer acknowledges the dispute was filed in error. STRONGEST possible evidence — lead with this in the merchant response callout. Katie Robertson 2026-05-10 email is the canonical example: "I will cancel the dispute with my card. My apologies!"',
+  },
+
+  notes:
+    'Katie Robertson case (2026-05-02 → 2026-05-13) is the canonical 12.5 for yhangry: customer paid £520, saw a USD amount on her Chase statement that didn\'t match what she\'d been mentally calculating, filed 12.5. The email exchange revealed she was converting GBP→EUR instead of GBP→USD; she acknowledged the error in writing and committed to withdrawing. RULES FOR 12.5 REBUTTALS: (1) NEVER lead with chef attendance — irrelevant, this is pricing not service. (2) NEVER lead with the complaint deadline — disputes can be filed pre-event for 12.x; the deadline argument doesn\'t bind. (3) LEAD with: "merchant-currency authorised = merchant-currency charged, no discrepancy". (4) Frame the cardholder\'s statement-currency value as the issuer\'s FX conversion (Chase converts GBP to USD at their own rate; merchant does not control this). (5) If a customer_admission email exists, that\'s dispositive — surface it as the BOTTOM-LINE callout in the PDF.',
+};
+
+const visa_12_6_1 = {
+  network: 'visa',
+  reason_code: '12.6.1',
+  label: 'Processing Error — Duplicate Processing',
+  description:
+    "Cardholder claims the same transaction was processed more than once. For yhangry this is rare but can arise during checkout retries or payment-method swaps. Counter-evidence focuses on showing only one charge was authorised for the disputed booking, or — if a true duplicate exists — that it was already refunded.",
+
+  common_claims: [
+    'transaction_charged_twice',
+    'duplicate_charge_for_same_booking',
+  ],
+
+  required_evidence: [
+    'payment_receipt',
+    'agreed_service_description',
+    'refund_processed_proof', // OR proof no duplicate exists; one of the two
+  ],
+
+  strengthening_evidence: [
+    'customer_admission',
+  ],
+
+  yhangry_evidence_sources: {
+    payment_receipt:
+      'Single Stripe charge record for the disputed booking. If a true duplicate exists, include both charge records + the refund record for the duplicate.',
+    agreed_service_description:
+      'Booking confirmation referencing the single disputed charge.',
+    refund_processed_proof:
+      'Stripe refund record for any duplicate charge that was already processed. If no duplicate exists, this field is N/A and the receipt alone is sufficient.',
+    customer_admission:
+      'Email correspondence where the customer acknowledges the dispute was filed in error (e.g. "I found the other charge was actually a different booking").',
+  },
+
+  notes:
+    "Verify in Stripe whether a true duplicate charge exists before submitting. If only one charge exists, the rebuttal is clean (single payment_receipt + booking confirmation). If a duplicate does exist, include the refund_processed_proof — the dispute should resolve as a refund-already-processed case rather than going to arbitration.",
+};
+
+const visa_12_6_2 = {
+  network: 'visa',
+  reason_code: '12.6.2',
+  label: 'Processing Error — Paid by Other Means',
+  description:
+    "Cardholder claims they paid for the goods/services by a different method (e.g. bank transfer, cash, different card) but were also charged on the disputed card. Counter-evidence focuses on showing no alternative payment was received by the merchant for this booking.",
+
+  common_claims: [
+    'already_paid_by_other_means',
+    'paid_in_cash_or_bank_transfer_for_same_booking',
+  ],
+
+  required_evidence: [
+    'payment_receipt',
+    'agreed_service_description',
+  ],
+
+  strengthening_evidence: [
+    'customer_admission',
+    'cancellation_policy_disclosure', // T&Cs typically forbid off-platform payment
+  ],
+
+  yhangry_evidence_sources: {
+    payment_receipt:
+      'Stripe charge record for the disputed booking. Verify with ops that no parallel payment (bank transfer, cash, second card) was received.',
+    agreed_service_description:
+      'Booking confirmation showing the card payment as the agreed payment method.',
+    customer_admission:
+      'Email correspondence where the customer acknowledges they did not in fact pay through another method.',
+    cancellation_policy_disclosure:
+      'yhangry T&Cs at yhangry.com/booking-terms require all payments on-platform — important context if the customer claims off-platform payment.',
+  },
+
+  notes:
+    "Before submitting, verify with ops that no parallel payment was received for this booking. yhangry\'s booking confirmation email explicitly warns customers not to pay off-platform (\"Our protection policies do not cover you if payments are made off platform\") — that warning is useful counter-evidence if the customer claims an off-platform payment was made.",
 };
 
 const visa_13_1 = {
@@ -519,6 +698,10 @@ const mc_4863 = {
 
 export const EVIDENCE_MATRIX = [
   visa_10_4,
+  visa_12_3,
+  visa_12_5,
+  visa_12_6_1,
+  visa_12_6_2,
   visa_13_1,
   visa_13_3,
   visa_13_5,
