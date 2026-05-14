@@ -5,10 +5,13 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ============================================================================
+// Click-to-Accept screenshot helpers (Tyler retro #4)
+// ============================================================================
 // Codes where click-to-accept (T&Cs, cancellation policy, stored-payment
-// authorisation) is required evidence per the matrix. For these we embed
-// the yhangry checkout screenshot as a page in the evidence PDF, since
-// per-user timestamped acceptance isn't yet captured on the booking record.
+// authorisation) is required evidence per the matrix. For these we embed the
+// yhangry checkout screenshot as a page, since per-user timestamped
+// acceptance isn't yet captured on the booking record.
 const CLICK_TO_ACCEPT_CODES = new Set([
   'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
   'mastercard:4853', 'mastercard:4860',
@@ -35,12 +38,16 @@ function drawCheckoutScreenshotPage(doc) {
     return;
   }
   doc.addPage();
-  sectionHeading(doc,
+  exhibitHeading(doc,
     'yhangry Checkout — Click-to-Accept Disclosure',
     'Booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.'
   );
   doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
 }
+
+// ============================================================================
+// Stream + page helpers
+// ============================================================================
 
 function collectBuffer(doc) {
   return new Promise((resolve, reject) => {
@@ -55,7 +62,10 @@ function checkPageSpace(doc, needed = 100) {
   if (doc.y > 720 - needed) doc.addPage();
 }
 
-// Backwards-compat: handle old string-form evidence entries
+// ============================================================================
+// Evidence normalisation + sorting (preserved from prior version)
+// ============================================================================
+
 function normaliseEvidence(item) {
   if (typeof item === 'string') {
     return { evidence: item, independence_score: null, strategic_priority: null, rationale: null };
@@ -71,7 +81,6 @@ function normaliseEvidence(item) {
 const PRIORITY_RANK = { PRIMARY: 0, SECONDARY: 1, TERTIARY: 2 };
 const INDEPENDENCE_RANK = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 
-// Sort evidence: PRIMARY first, then by independence within tier.
 function sortEvidenceForRender(items) {
   return [...items].sort((a, b) => {
     const ap = PRIORITY_RANK[a.strategic_priority] ?? 99;
@@ -84,21 +93,14 @@ function sortEvidenceForRender(items) {
 }
 
 const INDEPENDENCE_BADGE = {
-  HIGH: { label: 'HIGH', fill: '#2E7D32', text: '#FFFFFF' },     // green
-  MEDIUM: { label: 'MEDIUM', fill: '#1565C0', text: '#FFFFFF' }, // blue
-  LOW: { label: 'LOW', fill: '#F9A825', text: '#000000' },       // amber
+  HIGH: { label: 'HIGH', fill: '#2E7D32', text: '#FFFFFF' },
+  MEDIUM: { label: 'MEDIUM', fill: '#1565C0', text: '#FFFFFF' },
+  LOW: { label: 'LOW', fill: '#F9A825', text: '#000000' },
 };
-
 const PRIORITY_BADGE = {
-  PRIMARY: { label: 'PRIMARY', fill: '#1A237E', text: '#FFFFFF' },     // deep indigo
-  SECONDARY: { label: 'SECONDARY', fill: '#455A64', text: '#FFFFFF' }, // slate
-  TERTIARY: { label: 'TERTIARY', fill: '#9E9E9E', text: '#FFFFFF' },   // grey
-};
-
-const SEVERITY_BADGE = {
-  LOW: { label: 'LOW', fill: '#9E9E9E', text: '#FFFFFF' },
-  MEDIUM: { label: 'MEDIUM', fill: '#F57C00', text: '#FFFFFF' },
-  HIGH: { label: 'HIGH', fill: '#D32F2F', text: '#FFFFFF' },
+  PRIMARY: { label: 'PRIMARY', fill: '#1A237E', text: '#FFFFFF' },
+  SECONDARY: { label: 'SECONDARY', fill: '#455A64', text: '#FFFFFF' },
+  TERTIARY: { label: 'TERTIARY', fill: '#9E9E9E', text: '#FFFFFF' },
 };
 
 function drawBadge(doc, x, y, badge) {
@@ -112,29 +114,374 @@ function drawBadge(doc, x, y, badge) {
   return w;
 }
 
-function sectionHeading(doc, text, subtitle) {
-  checkPageSpace(doc, 60);
-  doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000').text(text, 50);
-  if (subtitle) {
-    doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666').text(subtitle, 50);
-    doc.fillColor('#000000');
-  }
-  doc.moveDown(0.5);
+// ============================================================================
+// Date formatting helpers
+// ============================================================================
+
+function formatEventDateLong(raw) {
+  if (!raw) return 'N/A';
+  const s = raw?.value || String(raw);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return s;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${m[3]} ${months[parseInt(m[2], 10) - 1]} ${m[1]}`;
 }
 
+function formatTimelineDate(iso) {
+  if (!iso) return '—';
+  const s = iso?.value || String(iso);
+  if (s.includes('T')) return s.replace('T', ' ').slice(0, 16);
+  return s.slice(0, 16);
+}
+
+// ============================================================================
+// Skimmer-first page 1 layout helpers (Tyler retro #8 — sub-commit 1)
+// ============================================================================
+
+const NAVY = '#1A237E';
+const GREEN_DARK = '#2E7D32';
+const GREEN_BG = '#E8F5E9';
+const AMBER_DARK = '#E65100';
+const AMBER_BG = '#FFF3E0';
+const BLUE_DARK = '#1565C0';
+const BLUE_BG = '#E3F2FD';
+const GREY_BG = '#F5F5F5';
+const GREY_BORDER = '#CCCCCC';
+const GREY_TEXT = '#555555';
+
+/**
+ * Pick the strongest single point to feature in the BOTTOM-LINE callout.
+ * Priority order:
+ *   1. CUSTOMER_CONTACT_FIRST recommendation → pre-event banner
+ *   2. LATE_COMPLAINT with measurable lateness → procedural argument
+ *   3. NO_COMPLAINT_FOUND → procedural argument
+ *   4. Chef survey submitted (CONFIRMED attendance) → service-rendered
+ *   5. PRIMARY/HIGH evidence_to_include item → strongest evidence
+ *   6. Fallback → reasoning summary
+ */
+function pickBottomLine(analysis, dispute, booking) {
+  if (analysis.recommendation === 'CUSTOMER_CONTACT_FIRST') {
+    const eventStr = formatEventDateLong(booking.event_date);
+    return {
+      headline: 'PRE-EVENT DISPUTE — CONTACT CUSTOMER FIRST',
+      detail: `The event has not yet taken place (scheduled ${eventStr}). The customer has likely filed this dispute in error — currency confusion, wanting a booking amendment, etc. The right next step is to contact the customer directly to clarify intent, offer the booking change they may have wanted, and request they withdraw the dispute with their issuing bank. Submit a rebuttal only if they refuse and the event date passes.`,
+      tone: 'pre-event',
+    };
+  }
+
+  const ec = analysis.earliest_contact;
+  if (analysis.deadline_status === 'LATE_COMPLAINT' && ec?.minutes_relative_to_deadline != null) {
+    const mins = Math.abs(ec.minutes_relative_to_deadline);
+    const human = mins >= 60 ? `${Math.floor(mins / 60)} HOURS ${mins % 60} MINS` : `${mins} MINUTES`;
+    return {
+      headline: `LATE COMPLAINT — ${human} PAST YHANGRY'S T&C DEADLINE`,
+      detail: `Cardholder's first complaint contact was at ${ec.timestamp_iso} via ${ec.channel || 'unknown channel'} (${ec.type || 'unknown type'}), past yhangry's T&C deadline of 12:00 PM local time on the day following the event. The deadline is binding under the agreed booking terms (yhangry.com/booking-terms).`,
+      tone: 'strong',
+    };
+  }
+
+  if (analysis.deadline_status === 'NO_COMPLAINT_FOUND') {
+    return {
+      headline: 'NO COMPLAINT LODGED WITHIN T&C WINDOW',
+      detail: 'No contact attempts found across Aircall, Bird, or Conduit channels within the complaint window. The cardholder bypassed the merchant\'s complaint process and filed directly with their issuing bank — a procedural failure to comply with the agreed booking terms.',
+      tone: 'strong',
+    };
+  }
+
+  if (analysis.chef_attendance_assessment === 'CONFIRMED' && booking.chef_submitted_payment_survey) {
+    const chefName = `${booking.chef_first_name || ''} ${booking.chef_last_name || ''}`.trim() || 'The chef';
+    return {
+      headline: 'CHEF ATTENDANCE CONFIRMED — POST-BOOKING SURVEY SUBMITTED',
+      detail: `${chefName} submitted the yhangry post-booking payment survey, a system-recorded HIGH-independence event that can only be created after the job is completed. This is direct proof of service delivery.`,
+      tone: 'strong',
+    };
+  }
+
+  const items = sortEvidenceForRender((analysis.evidence_to_include || []).map(normaliseEvidence));
+  const primaryHigh = items.find(e => e.strategic_priority === 'PRIMARY' && e.independence_score === 'HIGH');
+  if (primaryHigh) {
+    return {
+      headline: 'STRONGEST EVIDENCE',
+      detail: primaryHigh.evidence,
+      tone: 'moderate',
+    };
+  }
+
+  return {
+    headline: 'SEE EVIDENCE INDEX BELOW',
+    detail: analysis.reasoning || 'Refer to the evidence index below.',
+    tone: 'neutral',
+  };
+}
+
+function drawBottomLineCallout(doc, callout) {
+  const tones = {
+    'strong':    { bg: GREEN_BG, border: GREEN_DARK, text: GREEN_DARK },
+    'pre-event': { bg: AMBER_BG, border: AMBER_DARK, text: AMBER_DARK },
+    'moderate':  { bg: BLUE_BG,  border: BLUE_DARK,  text: BLUE_DARK },
+    'neutral':   { bg: GREY_BG,  border: GREY_BORDER, text: '#000000' },
+  };
+  const t = tones[callout.tone] || tones.neutral;
+
+  const x = 50, w = 495, padding = 10;
+  const startY = doc.y;
+
+  // Measure heights
+  doc.fontSize(11).font('Helvetica-Bold');
+  const headlineH = doc.heightOfString(`★ ${callout.headline}`, { width: w - padding * 2 });
+  doc.fontSize(9).font('Helvetica');
+  const detailH = doc.heightOfString(callout.detail, { width: w - padding * 2 });
+  const totalH = padding + headlineH + 4 + detailH + padding;
+
+  doc.lineWidth(1.5);
+  doc.roundedRect(x, startY, w, totalH, 4).fillAndStroke(t.bg, t.border);
+  doc.lineWidth(1);
+
+  doc.fillColor(t.text).fontSize(11).font('Helvetica-Bold')
+    .text(`★ ${callout.headline}`, x + padding, startY + padding, { width: w - padding * 2 });
+
+  doc.fillColor('#000000').fontSize(9).font('Helvetica')
+    .text(callout.detail, x + padding, doc.y + 2, { width: w - padding * 2 });
+
+  doc.fillColor('#000000');
+  doc.y = startY + totalH + 10;
+}
+
+function drawFactsGrid(doc, dispute, booking, analysis) {
+  const cells = [
+    {
+      label: 'TRANSACTION',
+      value: `$${(dispute.amount / 100).toFixed(2)}`,
+      sub: dispute.network_reason_code || dispute.reason || '—',
+    },
+    {
+      label: 'BOOKING',
+      value: `#${booking.order_id || analysis.booking_id}`,
+      sub: formatEventDateLong(booking.event_date),
+    },
+    {
+      label: 'CUSTOMER',
+      value: `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || '—',
+      sub: `Chef ${booking.chef_first_name || ''} ${booking.chef_last_name || ''}`.trim(),
+    },
+    {
+      label: 'STATUS',
+      value: analysis.recommendation || '—',
+      sub: analysis.rebuttal_strategy ? analysis.rebuttal_strategy.replace(/_/g, ' ') : '',
+    },
+  ];
+
+  const x0 = 50, w = 495, rowH = 52;
+  const cellW = w / cells.length;
+  const startY = doc.y;
+
+  for (let i = 0; i < cells.length; i++) {
+    const cellX = x0 + i * cellW;
+    doc.rect(cellX, startY, cellW, rowH).fill(GREY_BG);
+    doc.lineWidth(0.5).strokeColor(GREY_BORDER);
+    doc.rect(cellX, startY, cellW, rowH).stroke();
+
+    doc.fillColor(GREY_TEXT).fontSize(7).font('Helvetica')
+      .text(cells[i].label, cellX, startY + 6, { width: cellW, align: 'center' });
+    doc.fillColor(NAVY).fontSize(11).font('Helvetica-Bold')
+      .text(cells[i].value, cellX, startY + 19, { width: cellW, align: 'center' });
+    doc.fillColor(GREY_TEXT).fontSize(7).font('Helvetica')
+      .text(cells[i].sub, cellX, startY + 38, { width: cellW, align: 'center' });
+  }
+
+  doc.fillColor('#000000').strokeColor('#000000').lineWidth(1);
+  doc.y = startY + rowH + 12;
+}
+
+function drawSectionHeading(doc, text) {
+  checkPageSpace(doc, 40);
+  doc.fontSize(11).font('Helvetica-Bold').fillColor(NAVY)
+    .text(text, 50, doc.y);
+  doc.fillColor('#000000');
+  doc.y += 4;
+}
+
+function drawRebuttalBullets(doc, analysis) {
+  drawSectionHeading(doc, 'Why this dispute should resolve in the merchant\'s favour');
+
+  const points = analysis.suggested_rebuttal_points || [];
+  if (points.length === 0) {
+    doc.fontSize(9).font('Helvetica-Oblique').fillColor(GREY_TEXT)
+      .text('No specific rebuttal points generated.', 50, doc.y, { width: 495 });
+    doc.fillColor('#000000');
+    doc.y += 14;
+    return;
+  }
+
+  // Show up to 3 bullets — anything more dilutes the message
+  const shown = points.slice(0, 3);
+  for (const point of shown) {
+    checkPageSpace(doc, 30);
+    const startY = doc.y;
+    doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
+      .text('•', 50, startY, { width: 12 });
+    doc.fontSize(9).font('Helvetica')
+      .text(point, 62, startY, { width: 483 });
+    doc.y += 4;
+  }
+  doc.y += 4;
+}
+
+function drawCompactTimeline(doc, analysis, dispute, booking) {
+  drawSectionHeading(doc, 'Timeline');
+
+  const rows = [];
+
+  rows.push([
+    formatEventDateLong(booking.event_date),
+    `Event scheduled — Chef ${booking.chef_first_name || ''} ${booking.chef_last_name || ''}, ${booking.number_of_guests || '?'} guests`,
+  ]);
+
+  if (analysis.earliest_contact?.timestamp_iso) {
+    rows.push([
+      formatTimelineDate(analysis.earliest_contact.timestamp_iso),
+      `First complaint contact — ${analysis.earliest_contact.channel || 'unknown'} (${analysis.earliest_contact.type || 'unknown'})`,
+    ]);
+  } else if (analysis.deadline_status === 'NO_COMPLAINT_FOUND') {
+    rows.push(['—', 'No complaint contact found across any channel within the T&C window']);
+  }
+
+  if (analysis.deadline_iso) {
+    rows.push([
+      formatTimelineDate(analysis.deadline_iso),
+      'yhangry T&C complaint deadline (12:00 PM local time, day after event)',
+    ]);
+  }
+
+  rows.push([
+    analysis.dispute_id ? `Dispute ${analysis.dispute_id}` : 'Dispute filed',
+    'Cardholder filed dispute with issuing bank',
+  ]);
+
+  const x0 = 50, w = 495, colDate = 130, colEvent = w - colDate, rowH = 22;
+
+  for (let i = 0; i < rows.length; i++) {
+    checkPageSpace(doc, rowH + 4);
+    const rowY = doc.y;
+    doc.rect(x0, rowY, w, rowH).fill(i % 2 === 0 ? GREY_BG : '#FFFFFF');
+    doc.lineWidth(0.5).strokeColor(GREY_BORDER).rect(x0, rowY, w, rowH).stroke();
+
+    doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
+      .text(rows[i][0], x0 + 6, rowY + 6, { width: colDate - 12 });
+    doc.fontSize(8).font('Helvetica')
+      .text(rows[i][1], x0 + colDate, rowY + 6, { width: colEvent - 12 });
+
+    doc.y = rowY + rowH;
+  }
+
+  doc.strokeColor('#000000').lineWidth(1);
+  doc.y += 12;
+}
+
+function drawCompactEvidenceIndex(doc, analysis) {
+  drawSectionHeading(doc, 'Evidence to include');
+
+  const items = sortEvidenceForRender(
+    (analysis.evidence_to_include || []).map(normaliseEvidence)
+  );
+
+  if (items.length === 0) {
+    doc.fontSize(9).font('Helvetica-Oblique').fillColor(GREY_TEXT)
+      .text('No specific evidence items recommended.', 50, doc.y, { width: 495 });
+    doc.fillColor('#000000');
+    doc.y += 14;
+    return;
+  }
+
+  // Find the star — first PRIMARY+HIGH item, used in the BOTTOM-LINE callout
+  const starIndex = items.findIndex(e =>
+    e.strategic_priority === 'PRIMARY' && e.independence_score === 'HIGH'
+  );
+
+  const x0 = 50, w = 495;
+
+  // Header row
+  const headerY = doc.y;
+  doc.rect(x0, headerY, w, 18).fill(NAVY);
+  doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold');
+  doc.text('#', x0 + 6, headerY + 5, { width: 14 });
+  doc.text('PRIORITY', x0 + 22, headerY + 5, { width: 55 });
+  doc.text('SOURCE', x0 + 78, headerY + 5, { width: 50 });
+  doc.text('EVIDENCE', x0 + 132, headerY + 5, { width: w - 138 });
+  doc.fillColor('#000000');
+  doc.y = headerY + 18;
+
+  // Data rows — show all items in compact form (no rationale text)
+  items.forEach((item, i) => {
+    const isStarRow = i === starIndex;
+    const rowMinH = 22;
+    checkPageSpace(doc, rowMinH + 6);
+
+    // Measure evidence text height
+    doc.fontSize(8).font('Helvetica');
+    const evidenceH = doc.heightOfString(item.evidence || '', { width: w - 138 - 6 });
+    const rowH = Math.max(rowMinH, evidenceH + 10);
+
+    const rowY = doc.y;
+    const bgColor = isStarRow ? '#FFF8E1' : (i % 2 === 0 ? GREY_BG : '#FFFFFF');
+    doc.rect(x0, rowY, w, rowH).fill(bgColor);
+    doc.lineWidth(0.5).strokeColor(GREY_BORDER).rect(x0, rowY, w, rowH).stroke();
+
+    // Number (with star if applicable)
+    doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
+      .text(isStarRow ? `★${i + 1}` : `${i + 1}`, x0 + 6, rowY + 6, { width: 14 });
+
+    // Priority badge
+    if (item.strategic_priority) {
+      const pb = PRIORITY_BADGE[item.strategic_priority];
+      if (pb) drawBadge(doc, x0 + 22, rowY + 5, pb);
+    }
+
+    // Independence badge
+    if (item.independence_score) {
+      const ib = INDEPENDENCE_BADGE[item.independence_score];
+      if (ib) drawBadge(doc, x0 + 78, rowY + 5, ib);
+    }
+
+    // Evidence text
+    doc.fillColor('#000000').fontSize(8).font('Helvetica')
+      .text(item.evidence || '', x0 + 132, rowY + 5, { width: w - 138 });
+
+    doc.y = rowY + rowH;
+  });
+
+  doc.strokeColor('#000000').lineWidth(1);
+  doc.y += 8;
+}
+
+// ============================================================================
+// Exhibit page heading (used by click-to-accept and any future exhibits)
+// ============================================================================
+
+function exhibitHeading(doc, title, subtitle) {
+  doc.fontSize(14).font('Helvetica-Bold').fillColor(NAVY)
+    .text(title, 50, doc.y);
+  if (subtitle) {
+    doc.fontSize(9).font('Helvetica-Oblique').fillColor(GREY_TEXT)
+      .text(subtitle, 50, doc.y + 2, { width: 495 });
+    doc.fillColor('#000000');
+  }
+  doc.fillColor('#000000');
+  doc.y += 12;
+}
+
+// ============================================================================
+// Platform messages — chat bubbles (preserved from prior version)
+// ============================================================================
+
 function formatMessageTimestamp(raw) {
-  // BigQuery timestamps come back as { value: 'ISO string' } objects
   const s = raw?.value || raw;
   if (!s) return '';
-  // Render as 'YYYY-MM-DD HH:MM' for compactness
   const str = String(s);
   return str.includes('T') ? str.replace('T', ' ').slice(0, 16) : str.slice(0, 16);
 }
 
 function senderDisplayName(message) {
-  // Both customer_first_name and chef_first_name are always populated
-  // (they identify conversation parties, not who sent the message).
-  // Pick based on sender_role.
   const role = (message.sender_role || '').toLowerCase();
   if (role === 'chef') return message.chef_first_name || 'Chef';
   if (role === 'customer') return message.customer_first_name || 'Customer';
@@ -156,32 +503,31 @@ function drawChatBubble(doc, message) {
 
   checkPageSpace(doc, 60);
 
-  // Timestamp label
   doc.fontSize(7).font('Helvetica').fillColor('#999999')
     .text(`${time} — ${sender} (${name})`, x, doc.y, { width: maxWidth });
 
-  // Measure text height for bubble
   const bubbleY = doc.y;
   const textHeight = doc.heightOfString(body, { width: maxWidth - 20, fontSize: 9 });
   const bubbleHeight = textHeight + 14;
 
-  // Draw bubble
   doc.roundedRect(x, bubbleY, maxWidth, bubbleHeight, 8)
     .fillAndStroke(bubbleColor, '#E0E0E0');
 
-  // Draw text inside bubble
   doc.fontSize(9).font('Helvetica').fillColor('#000000')
     .text(body, x + 10, bubbleY + 7, { width: maxWidth - 20 });
 
   doc.y = bubbleY + bubbleHeight + 8;
 }
 
+// ============================================================================
+// Contact log table (preserved from prior version)
+// ============================================================================
+
 function drawCallLogTable(doc, contacts) {
   if (!contacts || contacts.length === 0) return;
 
   const tableX = 50;
 
-  // Header row
   doc.roundedRect(tableX, doc.y, 495, 20, 3).fillAndStroke('#333333', '#333333');
   const headerY = doc.y + 5;
   doc.fontSize(8).font('Helvetica-Bold').fillColor('#FFFFFF');
@@ -193,7 +539,6 @@ function drawCallLogTable(doc, contacts) {
   doc.fillColor('#000000');
   doc.y = doc.y + 22;
 
-  // Data rows
   for (let i = 0; i < contacts.length; i++) {
     checkPageSpace(doc, 20);
     const c = contacts[i];
@@ -211,161 +556,59 @@ function drawCallLogTable(doc, contacts) {
   }
 }
 
+// ============================================================================
+// Main entry point
+// ============================================================================
+
 export async function generateEvidence({ analysis, dispute, booking, platformMessages, allContacts }) {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const bufferPromise = collectBuffer(doc);
 
-  const amount = (dispute.amount / 100).toFixed(2);
+  // ===== PAGE 1: Skimmer-first merchant response summary =====
+  // (Tyler retro #8 sub-commit 1)
+  // The whole story in one scannable page: header → green BOTTOM-LINE
+  // callout → 4-cell facts grid → 3-bullet rebuttal → compact timeline →
+  // evidence index with ★-marked strongest item. Designed for a Stripe/bank
+  // reviewer's 30-second scan; the ★ exhibit appears highlighted in gold.
 
-  // ===== PAGE 1: Title + Case Summary =====
-  doc.fontSize(16).font('Helvetica-Bold')
-    .text(`Dispute Evidence — ${analysis.dispute_id}`, { align: 'center' });
-  doc.fontSize(9).font('Helvetica-Oblique')
-    .text(`Generated: ${new Date().toISOString()} | yhangry Dispute Agent`, { align: 'center' });
-  doc.moveDown(1.5);
+  const customerName = `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || 'Cardholder';
 
-  // Case Summary Box
-  const summaryRows = [
-    ['Dispute ID', analysis.dispute_id],
-    ['Booking ID', String(analysis.booking_id)],
-    ['Amount', `$${amount}`],
-    ['Dispute Reason', `${dispute.reason} (${dispute.network_reason_code || 'N/A'})`],
-    ['Event Date', String(booking.event_date)],
-    ['Customer', `${booking.first_name} ${booking.last_name} (${booking.customer_email})`],
-    ['Chef', `${booking.chef_first_name} ${booking.chef_last_name}`],
-    ['Guests', String(booking.number_of_guests)],
-    ['Address', `${booking.address_line1 || ''}, ${booking.address_postcode || ''}`],
-    ['Chef Marked Ready', String(booking.is_chef_ready_response)],
-    ['Chef Marked On Time', String(booking.is_chef_on_time_response)],
-    ['Chef Submitted Survey', String(booking.chef_submitted_payment_survey || false)],
-    ['Complaint Deadline', analysis.deadline_iso],
-    ['Deadline Status', analysis.deadline_status],
-    ['Chef Attendance', analysis.chef_attendance_assessment],
-    ['Recommendation', `${analysis.recommendation} | Evidence: ${analysis.evidence_strength}`],
-    ['Rebuttal Strategy', analysis.rebuttal_strategy ? analysis.rebuttal_strategy.replace(/_/g, ' ') : 'N/A'],
-  ];
+  // Title
+  doc.fontSize(14).font('Helvetica-Bold').fillColor(NAVY)
+    .text(`Merchant Response — ${customerName}`, 50, doc.y);
+  doc.fillColor('#000000');
 
-  // Calculate box height
-  const lineHeight = 14;
-  const boxHeight = summaryRows.length * lineHeight + 30;
-  const boxY = doc.y;
+  // Subtitle line
+  const subtitleParts = [
+    `Dispute ${analysis.dispute_id || dispute.id}`,
+    dispute.network_reason_code ? `Reason ${dispute.network_reason_code}` : null,
+    'yhangry / Stripe Payments',
+  ].filter(Boolean);
+  doc.fontSize(8).font('Helvetica-Oblique').fillColor(GREY_TEXT)
+    .text(subtitleParts.join('  •  '), 50, doc.y + 2);
+  doc.fillColor('#000000');
+  doc.y += 12;
 
-  doc.roundedRect(50, boxY, 495, boxHeight, 5).fillAndStroke('#F5F5F5', '#CCCCCC');
-  doc.fill('#000000');
+  // BOTTOM-LINE callout (the headline)
+  const callout = pickBottomLine(analysis, dispute, booking);
+  drawBottomLineCallout(doc, callout);
 
-  doc.fontSize(11).font('Helvetica-Bold').text('Case Summary', 60, boxY + 10);
-  doc.moveDown(0.2);
+  // 4-cell facts grid
+  drawFactsGrid(doc, dispute, booking, analysis);
 
-  doc.fontSize(9).font('Helvetica');
-  for (const [label, value] of summaryRows) {
-    doc.font('Helvetica-Bold').text(`${label}: `, 60, doc.y, { continued: true });
-    doc.font('Helvetica').text(value || 'N/A');
-  }
+  // 3-bullet rebuttal section
+  drawRebuttalBullets(doc, analysis);
 
-  doc.y = boxY + boxHeight + 15;
+  // Compact timeline
+  drawCompactTimeline(doc, analysis, dispute, booking);
 
-  // Lookup map for resolving claim_id → claim text in claim_analysis & weaknesses
-  const customerClaims = analysis.customer_claims || [];
-  const claimsById = Object.fromEntries(customerClaims.map((c) => [c.id, c]));
-  const narrativeProvided = analysis.narrative_provided === true;
-
-  // ===== Customer Claims (Extracted from VROL) =====
-  // Only renders if narrative was provided. Pre-narrative analyses have an
-  // empty customer_claims array and skip this entire section.
-  if (narrativeProvided && customerClaims.length > 0) {
-    sectionHeading(doc, `Customer Claims (${customerClaims.length})`,
-      'Extracted from the customer\'s VROL questionnaire narrative');
-    doc.fontSize(9).font('Helvetica');
-
-    customerClaims.forEach((c, i) => {
-      checkPageSpace(doc, 40);
-      const num = i + 1;
-      const cat = c.category ? ` [${c.category}]` : '';
-      doc.font('Helvetica-Bold').text(`${num}.${cat} `, 50, doc.y, { continued: true });
-      doc.font('Helvetica').text(c.claim || '', { width: 490 });
-      doc.moveDown(0.4);
-    });
-  }
-
-  // ===== Claim Analysis (per-claim evidence mapping) =====
-  if (analysis.claim_analysis && analysis.claim_analysis.length > 0) {
-    sectionHeading(doc, 'Claim Analysis',
-      'Each customer claim mapped to the evidence we have (or do not have)');
-    doc.fontSize(9).font('Helvetica');
-
-    for (const ca of analysis.claim_analysis) {
-      checkPageSpace(doc, 60);
-      const statusColor = ca.status === 'CONTRADICTED' ? '#D32F2F'
-        : ca.status === 'SUPPORTED' ? '#F57C00' : '#757575';
-
-      doc.roundedRect(50, doc.y, 495, 12, 2).fill(statusColor);
-      doc.fontSize(8).font('Helvetica-Bold').fillColor('#FFFFFF')
-        .text(` ${ca.status}`, 55, doc.y - 10);
-      doc.fillColor('#000000');
-
-      // Resolve claim text from customer_claims by id; fall back to claim_id
-      const claim = claimsById[ca.claim_id];
-      const claimText = claim?.claim || ca.claim_id || '(claim text missing)';
-
-      doc.fontSize(9).font('Helvetica-Oblique')
-        .text(`"${claimText}"`, 50, doc.y + 4, { width: 490 });
-      const indepTag = ca.evidence_independence ? ` [${ca.evidence_independence}]` : '';
-      doc.font('Helvetica')
-        .text(`Evidence${indepTag}: ${ca.evidence || 'no evidence available'}`, 50, doc.y, { width: 490 });
-      doc.moveDown(0.5);
-    }
-  } else if (narrativeProvided) {
-    sectionHeading(doc, 'Claim Analysis');
-    doc.fontSize(9).font('Helvetica').text('No claims extracted from narrative.', 50, doc.y, { width: 490 });
-  } else {
-    sectionHeading(doc, 'Claim Analysis');
-    doc.fontSize(9).font('Helvetica-Oblique').fillColor('#666666')
-      .text('Customer narrative not yet provided. Per-claim mapping is unlocked once ops pastes the VROL questionnaire via the Slack "Add Customer Narrative" button.', 50, doc.y, { width: 490 });
-    doc.fillColor('#000000');
-  }
-
-  // ===== Unaddressed Allegations =====
-  const unaddressed = analysis.unaddressed_claims || [];
-  if (unaddressed.length > 0) {
-    sectionHeading(doc, 'Unaddressed Allegations',
-      'Customer claims for which we have no available evidence — prepare manually or escalate');
-    doc.fontSize(9).font('Helvetica');
-
-    unaddressed.forEach((u, i) => {
-      checkPageSpace(doc, 40);
-      const claim = claimsById[u.claim_id];
-      const claimText = u.claim || claim?.claim || u.claim_id;
-      doc.font('Helvetica-Bold').text(`${i + 1}. `, 50, doc.y, { continued: true });
-      doc.font('Helvetica-Oblique').text(`"${claimText}"`, { width: 490 });
-      doc.font('Helvetica').fillColor('#666666')
-        .text(`Why unaddressed: ${u.why_unaddressed || ''}`, 50, doc.y, { width: 490 });
-      doc.fillColor('#000000');
-      doc.moveDown(0.4);
-    });
-  }
-
-  // ===== Rebuttal Points =====
-  sectionHeading(doc, 'Rebuttal Points');
-  doc.fontSize(9).font('Helvetica');
-  if (analysis.suggested_rebuttal_points && analysis.suggested_rebuttal_points.length > 0) {
-    analysis.suggested_rebuttal_points.forEach((point, i) => {
-      checkPageSpace(doc, 30);
-      doc.text(`${i + 1}. ${point}`, 50, doc.y, { width: 490 });
-      doc.moveDown(0.3);
-    });
-  } else {
-    doc.text('None.');
-  }
-
-  // ===== Reasoning =====
-  sectionHeading(doc, 'Analysis Reasoning');
-  doc.fontSize(9).font('Helvetica');
-  doc.text(analysis.reasoning || 'N/A', 50, doc.y, { width: 490 });
+  // Evidence index (with ★ on the row featured in the BOTTOM-LINE callout)
+  drawCompactEvidenceIndex(doc, analysis);
 
   // ===== PAGE 2+: Platform Messages (Chat Bubbles) =====
   doc.addPage();
-  sectionHeading(doc,
-    `Platform Messages — yhangry Booking #${analysis.booking_id}`,
+  exhibitHeading(doc,
+    `Platform Messages — yhangry Booking #${analysis.booking_id || booking.order_id}`,
     'Messages between chef and customer on the yhangry platform'
   );
 
@@ -385,159 +628,11 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // ===== Contact Log (Aircall / Bird / Conduit) =====
   if (allContacts && allContacts.length > 0) {
     doc.addPage();
-    sectionHeading(doc,
+    exhibitHeading(doc,
       'Inbound Contact Log',
-      `Customer phone: ${booking.customer_phone} | All channels from event date onwards`
+      `Customer phone: ${booking.customer_phone || 'n/a'} | All channels from event date onwards`
     );
     drawCallLogTable(doc, allContacts);
-  }
-
-  // ===== Evidence to Include (sorted by strategic priority, then independence) =====
-  const evidenceItems = sortEvidenceForRender(
-    (analysis.evidence_to_include || []).map(normaliseEvidence)
-  );
-  if (evidenceItems.length > 0) {
-    doc.moveDown(1);
-    sectionHeading(doc, 'Evidence to Include',
-      'Sorted PRIMARY first. Each item shows strategic priority + independence score.');
-
-    evidenceItems.forEach((item, i) => {
-      checkPageSpace(doc, 55);
-      const rowY = doc.y;
-
-      // Number
-      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
-        .text(`${i + 1}.`, 50, rowY, { continued: false, width: 18 });
-
-      let cursorX = 68;
-      // Priority badge first (most important visual signal)
-      const priorityBadge = PRIORITY_BADGE[item.strategic_priority];
-      if (priorityBadge) {
-        const w = drawBadge(doc, cursorX, rowY + 1, priorityBadge);
-        cursorX += w + 4;
-      }
-      // Independence badge second
-      const indepBadge = INDEPENDENCE_BADGE[item.independence_score];
-      if (indepBadge) {
-        const w = drawBadge(doc, cursorX, rowY + 1, indepBadge);
-        cursorX += w + 6;
-      }
-
-      doc.fontSize(9).font('Helvetica').fillColor('#000000')
-        .text(item.evidence, cursorX, rowY, { width: 545 - cursorX });
-
-      if (item.rationale) {
-        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
-          .text(item.rationale, 68, doc.y + 1, { width: 477 });
-        doc.fillColor('#000000');
-      }
-      doc.moveDown(0.4);
-    });
-  }
-
-  // ===== Evidence Weaknesses & Gaps =====
-  const weaknesses = analysis.evidence_weaknesses || [];
-  if (weaknesses.length > 0) {
-    doc.moveDown(0.5);
-    sectionHeading(doc, 'Evidence Weaknesses & Gaps',
-      'Items NOT to include in submitted evidence. Flagged so reviewer is aware of vulnerabilities in our case.');
-
-    weaknesses.forEach((w, i) => {
-      checkPageSpace(doc, 50);
-      const rowY = doc.y;
-
-      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
-        .text(`${i + 1}.`, 50, rowY, { continued: false, width: 18 });
-
-      const badge = SEVERITY_BADGE[w.severity];
-      const badgeWidth = badge ? drawBadge(doc, 68, rowY + 1, badge) : 0;
-      const textX = 68 + (badgeWidth ? badgeWidth + 6 : 0);
-
-      doc.fontSize(9).font('Helvetica').fillColor('#000000')
-        .text(w.weakness || '', textX, rowY, { width: 545 - textX });
-
-      if (w.affects_claim) {
-        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
-          .text(`Affects claim: ${w.affects_claim}`, 68, doc.y + 1, { width: 477 });
-        doc.fillColor('#000000');
-      }
-      doc.moveDown(0.4);
-    });
-  }
-
-  // ===== Evidence Requirements Check =====
-  // What does this dispute code actually need to win at the bank, and
-  // what do we have? Only renders when applicable (we have a playbook
-  // entry for this network/reason_code).
-  const reqCheck = analysis.evidence_requirements_check;
-  if (reqCheck && reqCheck.applicable) {
-    doc.moveDown(0.5);
-    const subtitle = reqCheck.code_label
-      ? `Bank evidence requirements for ${reqCheck.code_label}.`
-      : 'Bank evidence requirements for this dispute code.';
-    sectionHeading(doc, 'Evidence Requirements Check', subtitle);
-
-    function drawReqRow(item, sectionLabel) {
-      checkPageSpace(doc, 40);
-      const rowY = doc.y;
-      const isMissing = item.status === 'MISSING';
-      const statusBadge = isMissing
-        ? { label: 'MISSING', fill: '#D32F2F', text: '#FFFFFF' }
-        : { label: 'PRESENT', fill: '#2E7D32', text: '#FFFFFF' };
-      const badgeWidth = drawBadge(doc, 50, rowY + 1, statusBadge);
-      const textX = 50 + badgeWidth + 6;
-      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
-        .text(item.type || '', textX, rowY, { width: 545 - textX });
-      if (item.evidence) {
-        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#666666')
-          .text(item.evidence, 50, doc.y + 1, { width: 495 });
-        doc.fillColor('#000000');
-      }
-      doc.moveDown(0.35);
-    }
-
-    if ((reqCheck.required || []).length > 0) {
-      doc.fontSize(10).font('Helvetica-Bold').fillColor('#000000')
-        .text('Required:', 50, doc.y, { width: 495 });
-      doc.moveDown(0.15);
-      reqCheck.required.forEach((r) => drawReqRow(r, 'required'));
-    }
-
-    if ((reqCheck.strengthening || []).length > 0) {
-      doc.moveDown(0.2);
-      doc.fontSize(10).font('Helvetica-Bold').fillColor('#000000')
-        .text('Strengthening:', 50, doc.y, { width: 495 });
-      doc.moveDown(0.15);
-      reqCheck.strengthening.forEach((r) => drawReqRow(r, 'strengthening'));
-    }
-
-    if (reqCheck.missing_required_count > 0) {
-      doc.moveDown(0.3);
-      doc.fontSize(9).font('Helvetica-Bold').fillColor('#D32F2F')
-        .text(
-          `${reqCheck.missing_required_count} required item${reqCheck.missing_required_count === 1 ? '' : 's'} missing — strengthen the case manually before submission, or escalate.`,
-          50, doc.y, { width: 495 }
-        );
-      doc.fillColor('#000000');
-    }
-
-    if (reqCheck.summary) {
-      doc.moveDown(0.3);
-      doc.fontSize(9).font('Helvetica-Oblique').fillColor('#444444')
-        .text(reqCheck.summary, 50, doc.y, { width: 495 });
-      doc.fillColor('#000000');
-    }
-  }
-
-  // ===== Flags =====
-  if (analysis.flags && analysis.flags.length > 0) {
-    doc.moveDown(0.5);
-    sectionHeading(doc, 'Flags for Human Attention');
-    doc.fontSize(9).font('Helvetica');
-    analysis.flags.forEach((f) => {
-      doc.text(`• ${f}`, 50, doc.y, { width: 490 });
-      doc.moveDown(0.2);
-    });
   }
 
   doc.end();
