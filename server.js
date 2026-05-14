@@ -12,6 +12,8 @@ import {
   postFollowUp,
   postError as postSlackError,
   openNarrativeModal,
+  openEvidenceUploadModal,
+  uploadEvidencePdf,
   updateDisputeReview,
   updateDisputeReviewByCoords,
   decodeModalMetadata,
@@ -131,6 +133,128 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     if (messageTs || state.message_ts) {
       await postFollowUp(messageTs || state.message_ts, `:x: Error submitting evidence: ${err.message}`);
     }
+  }
+});
+
+// --- Upload Evidence flow (Tyler retro #8 sub-commit 3) ---
+//
+// 1. User clicks "Upload Evidence" on a dispute review message
+// 2. We open a modal with a file_input + descriptions textarea
+// 3. User selects JPG/PNG screenshots and submits
+// 4. We fetch each file from Slack as a Buffer, build an exhibits[] list,
+//    re-run analyseDispute() for fresh booking/messages/contacts, and
+//    regenerate the merchant response PDF via generateEvidence().
+// 5. PDF posts back to the dispute's thread for ops to download + submit
+//    to Stripe.
+
+slackApp.action('upload_evidence', async ({ action, ack, body }) => {
+  await ack();
+  const { dispute, messageTs, channelId } = actionContext(action, body);
+  if (!dispute?.id) {
+    console.error('[server] upload_evidence: bad button payload', action.value);
+    return;
+  }
+  try {
+    await openEvidenceUploadModal({
+      triggerId: body.trigger_id,
+      dispute,
+      channelId,
+      messageTs,
+    });
+  } catch (err) {
+    console.error(`[server] Failed to open upload modal for ${dispute.id}:`, err);
+  }
+});
+
+slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
+  await ack();
+
+  const meta = decodeModalMetadata(view.private_metadata);
+  if (!meta?.dispute?.id) {
+    console.error('[server] upload submission: failed to decode private_metadata', view.private_metadata);
+    return;
+  }
+  const { dispute, channelId, messageTs } = meta;
+
+  // Extract uploaded files. Slack's file_input element returns an array of
+  // file objects under view.state.values.<block_id>.<action_id>.files
+  const files =
+    view.state.values?.files_block?.files_input?.files || [];
+  if (files.length === 0) {
+    console.warn(`[server] No files uploaded for ${dispute.id}`);
+    try {
+      await postFollowUp(messageTs, ':warning: No files were attached. Click *Upload Evidence* again to retry.');
+    } catch {}
+    return;
+  }
+
+  // Parse per-file descriptions (one line per file, in upload order).
+  const descriptionsText =
+    view.state.values?.descriptions_block?.descriptions_input?.value || '';
+  const descriptionLines = descriptionsText.split('\n');
+
+  console.log(
+    `[server] Evidence upload: ${dispute.id} — ${files.length} file(s) by user ${body.user?.id}`
+  );
+
+  try {
+    // Re-run analysis for fresh booking/messages/contacts. The in-memory
+    // state Map can be stale on Render free tier, so we always re-fetch.
+    const result = await analyseDispute(dispute);
+    if (!result.booking) {
+      throw new Error(`Booking lookup failed for ${dispute.payment_intent}`);
+    }
+
+    // Fetch each file as a Buffer via Slack's authenticated download URL.
+    // Requires the bot token to have `files:read` scope.
+    const exhibits = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const url = f.url_private_download || f.url_private;
+      if (!url) {
+        console.warn(`[server] File ${i} has no download URL — skipping`);
+        continue;
+      }
+      const resp = await fetch(url, {
+        headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
+      });
+      if (!resp.ok) {
+        console.warn(`[server] Failed to fetch file ${f.name || i}: HTTP ${resp.status}`);
+        continue;
+      }
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const description = (descriptionLines[i] || '').trim() || f.title || f.name || '';
+      exhibits.push({ description, source: buffer });
+    }
+
+    if (exhibits.length === 0) {
+      throw new Error('All file fetches failed — check bot has files:read scope');
+    }
+
+    const customerName = `${result.booking.first_name || ''} ${result.booking.last_name || ''}`.trim() || 'Cardholder';
+    const pdfBuffer = await generateEvidence({
+      analysis: result.analysis,
+      dispute,
+      booking: result.booking,
+      platformMessages: result.messages,
+      allContacts: result.allContacts,
+      exhibits,
+    });
+
+    await uploadEvidencePdf({
+      channelId,
+      threadTs: messageTs,
+      pdfBuffer,
+      filename: `Merchant Response — ${customerName}.pdf`,
+      initialComment: `:page_facing_up: *Merchant Response PDF* — ${exhibits.length} exhibit${exhibits.length === 1 ? '' : 's'} embedded. Review before submitting to Stripe.`,
+    });
+
+    console.log(`[server] Posted evidence PDF for ${dispute.id} with ${exhibits.length} exhibit(s)`);
+  } catch (err) {
+    console.error(`[server] Evidence upload generation failed for ${dispute.id}:`, err);
+    try {
+      await postFollowUp(messageTs, `:x: Failed to generate evidence PDF: ${err.message}`);
+    } catch {}
   }
 });
 

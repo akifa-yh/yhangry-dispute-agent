@@ -166,6 +166,101 @@ export async function openNarrativeModal({ triggerId, dispute, channelId, messag
 }
 
 /**
+ * Open the "Upload Evidence" modal. Triggered by the new button on the
+ * dispute review message (Tyler retro #8, sub-commit 3).
+ *
+ * Modal contains:
+ *   - file_input element (JPG/PNG/PDF, max 10 files)
+ *   - multiline plain_text_input for per-file descriptions (one per line,
+ *     in upload order; blank lines fall back to the filename)
+ *
+ * Private metadata encodes dispute + channel + message_ts so the
+ * submission handler can fetch the files, regenerate the PDF with the
+ * uploaded exhibits, and post it back to the original message thread —
+ * surviving Render idle-sleep without needing the in-memory state Map.
+ *
+ * @param {object} args
+ * @param {string} args.triggerId
+ * @param {object} args.dispute  - {id, payment_intent, amount, reason, network_reason_code}
+ * @param {string} args.channelId
+ * @param {string} args.messageTs
+ */
+export async function openEvidenceUploadModal({ triggerId, dispute, channelId, messageTs }) {
+  const meta = JSON.stringify({
+    d: {
+      id: dispute.id,
+      pi: dispute.payment_intent,
+      amt: dispute.amount,
+      r: dispute.reason,
+      nrc: dispute.network_reason_code,
+    },
+    c: channelId,
+    t: messageTs,
+  });
+
+  await web().views.open({
+    trigger_id: triggerId,
+    view: {
+      type: 'modal',
+      callback_id: 'upload_evidence_submitted',
+      private_metadata: meta,
+      title: { type: 'plain_text', text: 'Upload evidence' },
+      submit: { type: 'plain_text', text: 'Generate Evidence' },
+      close: { type: 'plain_text', text: 'Cancel' },
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'Upload screenshots (JPG/PNG) of supporting evidence — emails, receipts, booking confirmations, etc. Each becomes a dedicated page in the merchant response PDF, after the standard analysis pages.',
+          },
+        },
+        { type: 'divider' },
+        {
+          type: 'input',
+          block_id: 'files_block',
+          label: { type: 'plain_text', text: 'Evidence files' },
+          element: {
+            type: 'file_input',
+            action_id: 'files_input',
+            filetypes: ['jpg', 'jpeg', 'png'],
+            max_files: 10,
+          },
+        },
+        {
+          type: 'input',
+          block_id: 'descriptions_block',
+          optional: true,
+          label: { type: 'plain_text', text: 'Descriptions (optional)' },
+          hint: { type: 'plain_text', text: 'One description per line, in upload order. Blank lines fall back to the filename. e.g. "Cardholder admission email — 10 May 2026"' },
+          element: {
+            type: 'plain_text_input',
+            action_id: 'descriptions_input',
+            multiline: true,
+            max_length: 2000,
+          },
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Upload a PDF buffer as a file in the dispute's Slack thread. Used by the
+ * evidence-upload submission handler to deliver the regenerated merchant
+ * response PDF (Tyler retro #8, sub-commit 3).
+ */
+export async function uploadEvidencePdf({ channelId, threadTs, pdfBuffer, filename, initialComment }) {
+  await web().filesUploadV2({
+    channel_id: channelId,
+    thread_ts: threadTs,
+    file: pdfBuffer,
+    filename,
+    initial_comment: initialComment || ':page_facing_up: Merchant Response PDF — review before submitting to Stripe.',
+  });
+}
+
+/**
  * Decode the modal's private_metadata back into a dispute object plus the
  * Slack channel/message coordinates needed to update the original review.
  */
