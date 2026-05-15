@@ -19,6 +19,20 @@ const CLICK_TO_ACCEPT_CODES = new Set([
   'mastercard:4853', 'mastercard:4860',
 ]);
 
+// Codes where the cancellation/refund T&Cs screenshot is material evidence.
+// Tyler retro: Tyler's bank explicitly cited "click-to-accept on cancellation
+// policy not demonstrated" as the reason for losing on 13.3, so 13.3 is
+// included. 13.5 (misrepresentation), 13.6 (credit not processed), 13.7
+// (cancelled merchandise), and the Mastercard equivalents 4853/4860 all
+// turn on whether the customer was bound by the cancellation policy.
+// Excluded: 12.x processing-error codes (cancellation policy irrelevant
+// for amount/currency disputes); fraud codes 10.4/4837/4863 (cardholder
+// is denying authorisation, not invoking cancellation rights).
+const CANCELLATION_TERMS_CODES = new Set([
+  'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
+  'mastercard:4853', 'mastercard:4860',
+]);
+
 function inferDisputeNetwork(dispute) {
   const n = (dispute?.network || '').toLowerCase();
   if (n) return n;
@@ -33,6 +47,11 @@ function shouldEmbedCheckoutScreenshot(dispute) {
   return CLICK_TO_ACCEPT_CODES.has(`${inferDisputeNetwork(dispute)}:${code}`);
 }
 
+function shouldEmbedCancellationTermsScreenshot(dispute) {
+  const code = String(dispute?.network_reason_code || '').trim();
+  return CANCELLATION_TERMS_CODES.has(`${inferDisputeNetwork(dispute)}:${code}`);
+}
+
 function drawCheckoutScreenshotPage(doc, letter) {
   const imgPath = path.join(__dirname, '..', 'assets', 'checkout-click-to-accept.jpeg');
   if (!fs.existsSync(imgPath)) {
@@ -43,6 +62,20 @@ function drawCheckoutScreenshotPage(doc, letter) {
   exhibitHeading(doc,
     letter ? `Exhibit ${letter}` : 'yhangry Checkout — Click-to-Accept Disclosure',
     'yhangry checkout screenshot — booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance required before payment.'
+  );
+  doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
+}
+
+function drawCancellationTermsPage(doc, letter) {
+  const imgPath = path.join(__dirname, '..', 'assets', 'cancellation-terms.jpeg');
+  if (!fs.existsSync(imgPath)) {
+    console.warn('[evidence] cancellation-terms.jpeg missing — skipping screenshot page');
+    return;
+  }
+  doc.addPage();
+  exhibitHeading(doc,
+    letter ? `Exhibit ${letter}` : 'yhangry Booking Terms — Cancellation Policy',
+    'yhangry booking terms (yhangry.com/booking-terms) — cancellation/refund clauses the customer agreed to at checkout. 100% cancellation fee within 7 days of booking time.'
   );
   doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
 }
@@ -324,6 +357,14 @@ function buildAttachedExhibitList({ dispute, platformMessages, allContacts, exhi
       kind: 'checkout',
       document: 'yhangry checkout screenshot',
       proves: 'Booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance is required before payment.',
+    });
+  }
+
+  if (shouldEmbedCancellationTermsScreenshot(dispute)) {
+    items.push({
+      kind: 'cancellation_terms',
+      document: 'yhangry booking terms — cancellation policy',
+      proves: 'Cancellation/refund clauses the customer agreed to at checkout (yhangry.com/booking-terms): 100% cancellation fee within 7 days of booking time, no refund after Grace Period.',
     });
   }
 
@@ -768,6 +809,8 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
       }
     } else if (item.kind === 'checkout') {
       drawCheckoutScreenshotPage(doc, item.letter);
+    } else if (item.kind === 'cancellation_terms') {
+      drawCancellationTermsPage(doc, item.letter);
     } else if (item.kind === 'contact_log') {
       doc.addPage();
       exhibitHeading(doc,
