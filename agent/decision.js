@@ -1,4 +1,5 @@
 const RECOMMENDATION_EMOJI = {
+  ACCEPT: ':stop_sign:',
   STRONG_COUNTER: ':white_check_mark:',
   COUNTER_WITH_CAVEATS: ':warning:',
   CUSTOMER_CONTACT_FIRST: ':envelope_with_arrow:',
@@ -237,6 +238,31 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     text: { type: 'mrkdwn', text: summaryLines.join('\n') },
   });
 
+  // ACCEPT banner — when the stolen-card signature flags STRONG_MATCH, the
+  // case is unwinnable and we shouldn't be building a counter at all. Make
+  // this impossible to miss; it sits above all the rebuttal-shaped content.
+  if (analysis.recommendation === 'ACCEPT') {
+    const sig = analysis._fraud_signature;
+    const overrideNote = analysis._overrode_recommendation
+      ? ` _LLM initially recommended ${analysis._overrode_recommendation}; deterministic override applied._`
+      : '';
+    const signalBits = sig
+      ? [
+          `issuer ${sig.issuerCountry || 'unknown'} on ${(sig.expectedCountry || 'unknown')} Stripe account`,
+          'no billing address',
+          `Stripe Radar ${sig.riskLevel || 'unknown'} risk`,
+          'fraud reason code',
+        ].join(' · ')
+      : '';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:stop_sign: *STOLEN-CARD FRAUD — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute* in the Stripe dashboard; do NOT counter. The legitimate cardholder did not authorise this charge, so platform-engagement evidence cannot rebut their claim — countering costs the same money and damages our merchant lost-dispute ratio.${signalBits ? `\n_Signals fired: ${signalBits}._` : ''}${overrideNote}`,
+      },
+    });
+  }
+
   // Pre-event banner — when the dispute was filed BEFORE the event date,
   // standard rebuttal logic doesn't apply. Make this impossible to miss:
   // it overrides the "approve & generate evidence" instinct.
@@ -250,8 +276,9 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     });
   }
 
-  // Pre-narrative banner — visible cue that ops can paste VROL to deepen analysis
-  if (!narrativeProvided) {
+  // Pre-narrative banner — visible cue that ops can paste VROL to deepen analysis.
+  // Hidden on ACCEPT because we're not doing claim-level analysis there.
+  if (!narrativeProvided && analysis.recommendation !== 'ACCEPT') {
     blocks.push({
       type: 'section',
       text: {
@@ -314,39 +341,48 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     });
   }
 
-  blocks.push({ type: 'divider' });
+  // Skip the rebuttal-shaped sections entirely on ACCEPT — we're not
+  // building a counter, so listing rebuttal points / evidence items /
+  // evidence requirements would just be visual noise that contradicts the
+  // top banner. Also skip the divider that would separate them from the
+  // deadline/attendance summary above.
+  const buildingCounter = analysis.recommendation !== 'ACCEPT';
 
-  blocks.push({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: `*Rebuttal points:*\n${rebuttalLines || 'None'}`,
-    },
-  });
+  if (buildingCounter) {
+    blocks.push({ type: 'divider' });
 
-  blocks.push({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: `*Evidence to include* _(independence-scored)_:\n${evidenceLines || '_No evidence items listed_'}`,
-    },
-  });
-
-  if (weaknessLines) {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*Evidence weaknesses & gaps* _(do NOT submit these as supporting evidence)_:\n${weaknessLines}`,
+        text: `*Rebuttal points:*\n${rebuttalLines || 'None'}`,
       },
     });
+
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Evidence to include* _(independence-scored)_:\n${evidenceLines || '_No evidence items listed_'}`,
+      },
+    });
+
+    if (weaknessLines) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Evidence weaknesses & gaps* _(do NOT submit these as supporting evidence)_:\n${weaknessLines}`,
+        },
+      });
+    }
   }
 
   // Evidence requirements check — what does this code actually need to win,
   // and what do we have? Only renders when applicable (i.e. we have a
   // playbook entry for this network/reason_code).
   const reqCheck = analysis.evidence_requirements_check;
-  if (reqCheck && reqCheck.applicable) {
+  if (buildingCounter && reqCheck && reqCheck.applicable) {
     const reqItems = (reqCheck.required || []).map((r) => {
       const emoji = REQ_STATUS_EMOJI[r.status] || ':grey_question:';
       const evidenceTail = r.evidence ? ` — _${r.evidence}_` : '';

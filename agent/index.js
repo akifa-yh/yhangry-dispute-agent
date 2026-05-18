@@ -9,6 +9,7 @@ import { fetchCustomerCorrespondence } from '../integrations/gmail.js';
 import { getComplaintDeadline } from '../utils/timezone.js';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { lookupMatrixEntry } from './evidence_matrix.js';
+import { computeFraudSignature } from './fraud_signature.js';
 
 function normalisePhoneForLookup(phone, postcode) {
   if (!phone) return null;
@@ -215,6 +216,21 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     `[agent] Pre-event check: dispute_created=${disputeCreatedIso} event=${eventDateStr} → isPreEvent=${isPreEvent}, daysUntilEvent=${daysUntilEvent}`
   );
 
+  // Step 5d: Compute stolen-card fraud signature. Deterministic over Stripe
+  // charge data — fraud_code prerequisite + foreign_card + no_address +
+  // elevated_risk. STRONG_MATCH (all 4 fire) forces an ACCEPT override
+  // below, regardless of LLM output. PARTIAL_MATCH gets passed to Gemini
+  // as judgement input. See agent/fraud_signature.js.
+  let fraudSignature = null;
+  try {
+    fraudSignature = await computeFraudSignature(dispute);
+    console.log(
+      `[agent] Fraud signature: verdict=${fraudSignature.verdict} score=${fraudSignature.score}/3 signals=${JSON.stringify(fraudSignature.signals)}`
+    );
+  } catch (err) {
+    console.error('[agent] Fraud signature computation failed (non-fatal):', err.message);
+  }
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -234,9 +250,40 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     isPreEvent,
     daysUntilEvent,
     gmailMessages,
+    fraudSignature,
   });
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);
+
+  // Deterministic safety net: when the fraud signature is STRONG_MATCH the
+  // case is unwinnable regardless of platform-engagement evidence (the
+  // legitimate cardholder didn't authorise the charge — the engagement was
+  // the fraudster). Force ACCEPT even if the LLM ignored the rule. We
+  // preserve the LLM's reasoning prefixed with an override notice so ops
+  // can see what was overridden.
+  if (fraudSignature?.verdict === 'STRONG_MATCH' && analysis.recommendation !== 'ACCEPT') {
+    console.warn(
+      `[agent] Overriding LLM recommendation ${analysis.recommendation} → ACCEPT (fraud signature STRONG_MATCH)`
+    );
+    analysis._overrode_recommendation = analysis.recommendation;
+    analysis.recommendation = 'ACCEPT';
+    analysis.rebuttal_strategy = 'ACCEPT_STOLEN_CARD';
+    analysis.evidence_strength = 'N/A';
+    analysis.evidence_to_include = [];
+    analysis.suggested_rebuttal_points = [];
+    analysis.reasoning =
+      `[Deterministic override applied — stolen-card signature STRONG_MATCH] ${analysis.reasoning || ''}`.trim();
+    analysis.flags = [
+      ...(analysis.flags || []),
+      `Stolen-card signature STRONG_MATCH — recommendation overridden from ${analysis._overrode_recommendation} to ACCEPT. Issuer: ${fraudSignature.issuerCountry || 'unknown'} on a ${fraudSignature.expectedCountry || 'unknown'} Stripe account, no billing address, Stripe Radar ${fraudSignature.riskLevel || 'unknown'} risk, fraud reason code.`,
+    ];
+  }
+
+  // Stash the signature on the analysis so downstream renderers (decision.js)
+  // can show signal details on ACCEPT posts without re-fetching the charge.
+  if (fraudSignature) {
+    analysis._fraud_signature = fraudSignature;
+  }
 
   // Step 7: Product gap tracking — record any tags Gemini emitted, then check
   // 30-day frequency thresholds and post to #product-gaps for newly-crossed
