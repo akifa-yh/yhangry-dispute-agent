@@ -96,6 +96,77 @@ export async function getBookingByPaymentId(paymentId) {
   return rows[0] || null;
 }
 
+// Same shape as getBookingByPaymentId but matches on the order id directly,
+// for cases where the dispute's payment_intent is a remainder-charge
+// (transaction_type: remainder_auto_charge) rather than the order's stored
+// initial-deposit payment_id. The order_id is recoverable from the Stripe
+// charge metadata in those cases — see analyseDispute's fallback path.
+export async function getBookingByOrderId(orderId) {
+  const query = `
+    SELECT
+      o.id                        AS order_id,
+      o.meal_date                 AS event_date,
+      o.payment_id                AS stripe_payment_id,
+      o.number_of_guests,
+      o.payable_amount            AS total_amount,
+      o.order_status,
+
+      cust.id                     AS customer_id,
+      cust.phone                  AS customer_phone,
+
+      cu.first_name,
+      cu.last_name,
+      cu.email                    AS customer_email,
+
+      ch.id                       AS chef_id,
+      ch.flakes_count,
+      ch.phone                    AS chef_phone,
+
+      chef_u.first_name           AS chef_first_name,
+      chef_u.last_name            AS chef_last_name,
+      chef_u.email                AS chef_email,
+
+      cj.is_chef_ready_response,
+      cj.is_chef_on_time_response,
+      cj.status                   AS chef_job_status,
+
+      a.house_number_name         AS address_line1,
+      a.street_name               AS address_line2,
+      a.postcode                  AS address_postcode,
+
+      CASE WHEN cf.id IS NOT NULL THEN true ELSE false END AS chef_submitted_payment_survey,
+      cf.grocery_cost             AS survey_grocery_cost,
+      cf.chef_comment             AS survey_chef_comment,
+      cf.customer_rating          AS survey_customer_rating
+
+    FROM ${t('orders')} o
+    JOIN ${t('customers')} cust ON cust.id = o.customer_id
+    JOIN ${t('users')} cu
+      ON cu.userable_id = cust.id
+      AND cu.userable_type LIKE '%Customer%'
+    JOIN ${t('jobs')} j ON j.order_id = o.id
+    JOIN ${t('chef_job')} cj ON cj.job_id = j.id
+    JOIN ${t('chefs')} ch ON ch.id = cj.chef_id
+    JOIN ${t('users')} chef_u
+      ON chef_u.userable_id = ch.id
+      AND chef_u.userable_type LIKE '%Chef%'
+    JOIN ${t('address_order')} ao ON ao.order_id = o.id
+    JOIN ${t('addresses')} a ON a.id = ao.address_id
+    LEFT JOIN ${t('chef_feedback')} cf ON cf.order_id = o.id AND cf.chef_id = ch.id
+
+    WHERE o.id = @orderId
+    LIMIT 1
+  `;
+
+  // BigQuery STRING params: order ids may come in as numeric strings from
+  // Stripe metadata; CAST handles both string and int columns.
+  const [rows] = await bigquery.query({
+    query: query.replace('WHERE o.id = @orderId', 'WHERE CAST(o.id AS STRING) = @orderId'),
+    params: { orderId: String(orderId) },
+  });
+  return rows[0] || null;
+}
+
 export async function getPlatformMessages(orderId) {
   const query = `
     SELECT

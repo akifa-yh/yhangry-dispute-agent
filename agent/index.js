@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { DateTime } from 'luxon';
 import * as bigquery from '../integrations/bigquery.js';
+import { fetchChargeFromEitherAccount } from '../integrations/stripe.js';
 import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
@@ -100,13 +101,40 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
 
   console.log(`[agent] Analysing dispute ${disputeId} for payment ${paymentId}`);
 
-  // Step 1: Look up booking
-  const booking = await bigquery.getBookingByPaymentId(paymentId);
+  // Step 1: Look up booking. Primary path matches `orders.payment_id` against
+  // the dispute's payment_intent — works for deposit-charge disputes. For
+  // remainder-charge disputes (transaction_type: remainder_auto_charge), the
+  // payment_intent doesn't match anything in orders.payment_id, so we fall
+  // back to the order_id stored in the Stripe charge's metadata. Without
+  // this fallback the agent silently bails with "booking not found" on
+  // every two-stage-payment booking dispute.
+  let booking = await bigquery.getBookingByPaymentId(paymentId);
+  let bookingLookupPath = 'payment_id';
+
+  if (!booking) {
+    console.log(`[agent] No booking via payment_id=${paymentId}, trying charge.metadata.order_id fallback`);
+    try {
+      const chargeId = dispute.charge;
+      if (chargeId) {
+        const { charge } = await fetchChargeFromEitherAccount(chargeId);
+        const orderId = charge?.metadata?.order_id;
+        if (orderId) {
+          booking = await bigquery.getBookingByOrderId(orderId);
+          if (booking) bookingLookupPath = `charge.metadata.order_id=${orderId}`;
+        } else {
+          console.log('[agent] charge.metadata.order_id missing — cannot fall back');
+        }
+      }
+    } catch (err) {
+      console.error('[agent] Order-id fallback failed:', err.message);
+    }
+  }
+
   if (!booking) {
     return { booking: null, paymentId };
   }
 
-  console.log(`[agent] Found booking ${booking.order_id} for ${booking.first_name} ${booking.last_name}`);
+  console.log(`[agent] Found booking ${booking.order_id} for ${booking.first_name} ${booking.last_name} (via ${bookingLookupPath})`);
 
   // Step 2: Normalise event_date (BigQuery returns BigQueryDate object)
   const eventDateStr = booking.event_date?.value || String(booking.event_date);

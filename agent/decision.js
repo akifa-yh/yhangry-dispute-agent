@@ -263,6 +263,24 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     });
   }
 
+  // Customer-admission banner — when Gmail correspondence contains a written
+  // admission from the cardholder (per the prompt's CUSTOMER ADMISSION
+  // DETECTION rules), it's the strongest possible counter-evidence and the
+  // PDF generator already leads with it. Surface it equally prominently in
+  // the Slack post so ops sees it at a glance rather than buried in the
+  // Reasoning text. Independent of recommendation — admission can co-exist
+  // with STRONG_COUNTER, COUNTER_WITH_CAVEATS, etc.
+  if (analysis.customer_admission_detected && analysis.customer_admission_evidence) {
+    const quote = String(analysis.customer_admission_evidence).trim().replace(/\n+/g, ' ');
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:writing_hand: *CARDHOLDER ADMISSION DETECTED* — the strongest possible counter-evidence. Banks rule for the merchant almost every time when the cardholder has admitted in writing.\n> _"${quote}"_\nThe PDF will lead with this admission as the primary argument.`,
+      },
+    });
+  }
+
   // Pre-event banner — when the dispute was filed BEFORE the event date,
   // standard rebuttal logic doesn't apply. Make this impossible to miss:
   // it overrides the "approve & generate evidence" instinct.
