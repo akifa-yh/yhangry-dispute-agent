@@ -459,6 +459,7 @@ defined as the cardholder explicitly acknowledging in writing that:
 A customer admission is the strongest possible counter-evidence in any
 dispute — banks rule for the merchant essentially every time when the
 cardholder has admitted error in writing. Examples of admission language:
+  - "I have cancelled the dispute"
   - "I will cancel the dispute"
   - "I'll withdraw the dispute"
   - "I'll let my bank know it was a mistake"
@@ -468,10 +469,29 @@ cardholder has admitted error in writing. Examples of admission language:
   - "I didn't realise..."
   - "Sorry for the confusion"
 
+CRITICAL — SENDER IDENTITY:
+An admission is only valid if it appears in an email WRITTEN BY THE
+CARDHOLDER themselves. Specifically:
+
+  - The email's \`From:\` header must be the cardholder's email address
+    (typically a personal address like gmail.com / outlook.com / icloud.com).
+  - The \`From:\` must NOT be info@yhangry.com or any yhangry-side
+    sender. yhangry's own emails to the cardholder — even when they
+    quote, paraphrase, or describe the cardholder's withdrawal — are
+    NOT admissions. They are yhangry speaking about the cardholder,
+    not the cardholder speaking.
+  - Quotes embedded inside yhangry-sent emails (forwarded text,
+    summaries, confirmations like "as you mentioned, you have
+    cancelled") do NOT count. The literal quote in
+    customer_admission_evidence must come from a cardholder-sent
+    email body.
+
 When you detect an admission:
   1. Set customer_admission_detected: true
-  2. Quote the exact admission text (1-2 sentences max) into
-     customer_admission_evidence
+  2. Quote the exact admission text (1-2 sentences max, verbatim) into
+     customer_admission_evidence. The quote MUST be copied from a
+     cardholder-sent email body — verify the From: header before
+     extracting.
   3. The admission OVERRIDES whatever rebuttal strategy you would have
      picked otherwise — make this evidence the leading argument
   4. Add it to evidence_to_include with strategic_priority: PRIMARY,
@@ -479,10 +499,11 @@ When you detect an admission:
      cardholder's own written acknowledgement
   5. In reasoning, lead with the admission
 
-If no admission is present (or the Gmail section is empty), set
+If no admission is present (or the Gmail section is empty), or every
+candidate admission phrase appears only in yhangry-sent emails, set
 customer_admission_detected: false and leave customer_admission_evidence
 empty/null. Do NOT fabricate admissions — only quote actual text from
-the Gmail emails.
+cardholder-sent Gmail emails.
 
 PRE-EVENT DISPUTE HANDLING:
 The user message includes a PRE-EVENT CONTEXT block stating whether the

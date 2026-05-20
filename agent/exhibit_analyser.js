@@ -140,7 +140,12 @@ preamble outside the JSON. Schema:
       model: 'gemini-2.5-flash',
       contents: [{ role: 'user', parts }],
       config: {
-        maxOutputTokens: 4096,
+        // Bumped from 4096 → 32768 on 2026-05-20 after the Khushbu Aggarwal
+        // submission truncated mid-entry-2 with 10 images. Each rich
+        // {document_label, proves} entry takes ~1000-1500 tokens; 10 images
+        // can comfortably exceed 4k. 32k gives generous headroom for the
+        // max-10 case + leaves margin if Gemini gets more verbose.
+        maxOutputTokens: 32768,
         temperature: 0.2,
         responseMimeType: 'application/json',
       },

@@ -302,7 +302,14 @@ function pickBottomLine(analysis, dispute, booking) {
 // irrelevant (amount/currency disputes turn on the receipt, not the menu
 // chat). For 13.x (not-as-described) and fraud codes the chat is directly
 // material — it proves engagement, service description agreement, etc.
-function shouldIncludePlatformMessages(dispute) {
+//
+// Also gated off when the agent has detected a customer admission. The
+// admission is the case's leading argument; the rest of the chat thread
+// just clutters the submission and pulls reviewer attention away from
+// the smoking-gun quote. Added 2026-05-20 after the Khushbu Aggarwal
+// submission included 5 pages of menu negotiation on an admission case.
+function shouldIncludePlatformMessages(dispute, analysis) {
+  if (analysis?.customer_admission_detected) return false;
   const code = String(dispute?.network_reason_code || '').trim();
   if (/^12\.\d/.test(code)) return false;
   return true;
@@ -341,10 +348,10 @@ function splitExhibitDescription(text) {
 //   2. Click-to-accept screenshot (when applicable)
 //   3. Inbound contact log (when present)
 //   4. User-uploaded exhibits
-function buildAttachedExhibitList({ dispute, platformMessages, allContacts, exhibits }) {
+function buildAttachedExhibitList({ dispute, analysis, platformMessages, allContacts, exhibits }) {
   const items = [];
 
-  if (shouldIncludePlatformMessages(dispute) && platformMessages && platformMessages.length > 0) {
+  if (shouldIncludePlatformMessages(dispute, analysis) && platformMessages && platformMessages.length > 0) {
     items.push({
       kind: 'platform_messages',
       document: 'Platform messages',
@@ -428,6 +435,10 @@ function drawBottomLineCallout(doc, callout) {
 }
 
 function drawFactsGrid(doc, dispute, booking, analysis) {
+  // STATUS / recommendation / rebuttal_strategy are internal ops vocabulary
+  // (STRONG_COUNTER, CLAIM_BY_CLAIM, etc.) that mean nothing to a bank
+  // reviewer — removed from the public-facing grid 2026-05-20. Keep them
+  // surfaced in the Slack post + reasoning for ops only.
   const cells = [
     {
       label: 'TRANSACTION',
@@ -443,11 +454,6 @@ function drawFactsGrid(doc, dispute, booking, analysis) {
       label: 'CUSTOMER',
       value: `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || '—',
       sub: `Chef ${booking.chef_first_name || ''} ${booking.chef_last_name || ''}`.trim(),
-    },
-    {
-      label: 'STATUS',
-      value: analysis.recommendation || '—',
-      sub: analysis.rebuttal_strategy ? analysis.rebuttal_strategy.replace(/_/g, ' ') : '',
     },
   ];
 
@@ -787,7 +793,7 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // assigned here are reused on each exhibit's page header so the page-1
   // Evidence table corresponds exactly to what the reviewer sees later.
   const attachedExhibits = buildAttachedExhibitList({
-    dispute, platformMessages, allContacts, exhibits,
+    dispute, analysis, platformMessages, allContacts, exhibits,
   });
 
   // Page-1 Evidence table — lists actual attached exhibits with letters
