@@ -35,6 +35,24 @@ export async function fetchChargeFromEitherAccount(chargeId) {
   }
 }
 
+// Fetch a dispute from whichever account owns it. Same dual-account pattern
+// as fetchChargeFromEitherAccount. Used by analyseDispute to rehydrate
+// dispute objects that arrive from button/modal payloads stripped down to
+// { id, payment_intent, amount, reason, network_reason_code } — without
+// rehydration `dispute.charge` is undefined, which breaks the booking-lookup
+// fallback and the fraud_signature module.
+export async function fetchDisputeFromEitherAccount(disputeId) {
+  try {
+    const dispute = await getStripeUk().disputes.retrieve(disputeId);
+    return { dispute, account: 'uk' };
+  } catch (err) {
+    const notFound = err?.code === 'resource_missing' || err?.statusCode === 404;
+    if (!notFound) throw err;
+    const dispute = await getStripeUs().disputes.retrieve(disputeId);
+    return { dispute, account: 'us' };
+  }
+}
+
 export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
   // Step 1: Upload docx
   const file = await getStripe().files.create({

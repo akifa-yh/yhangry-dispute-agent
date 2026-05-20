@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { DateTime } from 'luxon';
 import * as bigquery from '../integrations/bigquery.js';
-import { fetchChargeFromEitherAccount } from '../integrations/stripe.js';
+import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount } from '../integrations/stripe.js';
 import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
@@ -97,6 +97,25 @@ async function runAgent(data) {
  */
 export async function analyseDispute(dispute, { narrative = null } = {}) {
   const disputeId = dispute.id;
+
+  // Hydrate dispute when it arrives from a button/modal payload missing
+  // `charge`. The webhook delivers a full dispute object, but the action
+  // handlers (Paste Narrative, Upload VROL, Approve, etc.) reconstruct a
+  // stripped-down dispute from the encoded button value or modal
+  // private_metadata that only carries id, payment_intent, amount, reason,
+  // network_reason_code. Without `charge`, the booking-lookup fallback and
+  // fraud_signature can't read charge.metadata or pull payment_method
+  // details — every re-analysis would silently degrade.
+  if (!dispute.charge && dispute.id) {
+    try {
+      const { dispute: full } = await fetchDisputeFromEitherAccount(dispute.id);
+      dispute = full;
+      console.log(`[agent] Hydrated dispute ${disputeId} from Stripe (charge=${dispute.charge})`);
+    } catch (err) {
+      console.warn(`[agent] Could not hydrate dispute ${disputeId} from Stripe: ${err.message}`);
+    }
+  }
+
   const paymentId = dispute.payment_intent || dispute.charge;
 
   console.log(`[agent] Analysing dispute ${disputeId} for payment ${paymentId}`);
