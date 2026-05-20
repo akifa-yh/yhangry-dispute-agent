@@ -20,6 +20,7 @@ import {
   openVrolUploadModal,
   openEvidenceUploadModal,
   uploadEvidencePdf,
+  fetchLatestEvidencePdfFromThread,
   updateDisputeReview,
   updateDisputeReviewByCoords,
   decodeModalMetadata,
@@ -125,18 +126,52 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
   }
 
   try {
-    const docxBuffer = await generateEvidence({
-      analysis: state.analysis,
-      dispute,
-      booking: state.booking,
-      platformMessages: state.messages || [],
-      allContacts: state.all_contacts || [],
-    });
+    // Prefer the most recent Upload Evidence PDF posted to the dispute's
+    // Slack thread. That PDF contains the ops-curated exhibits + the latest
+    // narrative-driven framing; regenerating from analysis state would drop
+    // the uploaded screenshots (Khushbu Aggarwal $50 case 2026-05-21 was
+    // the canonical reproducer). Falls back to building a fresh PDF when
+    // no prior Upload Evidence PDF exists in the thread (legacy disputes,
+    // or first-time ops approval without an earlier review pass).
+    const threadCoords = {
+      channelId: state.channel_id || process.env.SLACK_CHANNEL_ID,
+      threadTs: messageTs || state.message_ts,
+    };
+
+    let docxBuffer = null;
+    let pdfSource;
+    if (threadCoords.channelId && threadCoords.threadTs) {
+      const existing = await fetchLatestEvidencePdfFromThread(threadCoords);
+      if (existing) {
+        docxBuffer = existing.buffer;
+        pdfSource = `slack-thread (${existing.filename}, ${existing.buffer.length} bytes)`;
+        console.log(
+          `[server] approve_dispute: reusing PDF from thread for ${dispute.id} — ${pdfSource}`
+        );
+      }
+    }
+
+    if (!docxBuffer) {
+      docxBuffer = await generateEvidence({
+        analysis: state.analysis,
+        dispute,
+        booking: state.booking,
+        platformMessages: state.messages || [],
+        allContacts: state.all_contacts || [],
+      });
+      pdfSource = 'generated-from-analysis (no prior Upload Evidence PDF in thread)';
+      console.log(
+        `[server] approve_dispute: built fresh PDF for ${dispute.id} — ${pdfSource}`
+      );
+    }
 
     await submitEvidence(dispute.id, state.analysis, state.booking, docxBuffer);
 
     const ts = new Date().toISOString();
-    await updateMessage(messageTs || state.message_ts, `✅ Evidence submitted to Stripe at ${ts}`);
+    await updateMessage(
+      messageTs || state.message_ts,
+      `✅ Evidence submitted to Stripe at ${ts} (PDF source: ${pdfSource})`
+    );
   } catch (err) {
     console.error(`[server] Error approving dispute ${dispute.id}:`, err);
     if (messageTs || state.message_ts) {

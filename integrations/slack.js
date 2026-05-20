@@ -354,6 +354,85 @@ export async function uploadEvidencePdf({ channelId, threadTs, pdfBuffer, filena
 }
 
 /**
+ * Find the most recent PDF posted in a dispute's Slack thread and return it
+ * as a Buffer. Used by the Approve & Generate Evidence handler to reuse the
+ * Upload Evidence-built PDF (with exhibits) instead of regenerating a
+ * stripped-down version. Returns null if no PDF is found.
+ *
+ * Requires the bot to have `files:read` scope (already granted for the
+ * Upload Evidence + VROL flows).
+ *
+ * @param {object} args
+ * @param {string} args.channelId
+ * @param {string} args.threadTs  - parent message ts of the dispute review
+ * @returns {Promise<{buffer: Buffer, filename: string, file_id: string, posted_at: number}|null>}
+ */
+export async function fetchLatestEvidencePdfFromThread({ channelId, threadTs }) {
+  if (!channelId || !threadTs) return null;
+
+  let messages;
+  try {
+    const res = await web().conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      limit: 100,
+    });
+    messages = res.messages || [];
+  } catch (err) {
+    console.warn(`[slack] conversations.replies failed for ${channelId}/${threadTs}: ${err.message}`);
+    return null;
+  }
+
+  // Walk newest → oldest to find the most recent PDF attachment. Slack
+  // returns thread replies in chronological order (oldest first), so we
+  // iterate from the end.
+  let chosen = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const files = m.files || [];
+    for (const f of files) {
+      const ext = (f.filetype || '').toLowerCase();
+      const name = (f.name || f.title || '').toLowerCase();
+      if (ext === 'pdf' || name.endsWith('.pdf')) {
+        chosen = { file: f, posted_at: Number(m.ts) || 0 };
+        break;
+      }
+    }
+    if (chosen) break;
+  }
+
+  if (!chosen) return null;
+
+  const url = chosen.file.url_private_download || chosen.file.url_private;
+  if (!url) {
+    console.warn(`[slack] PDF found in thread but no download URL: ${chosen.file.id}`);
+    return null;
+  }
+
+  let buffer;
+  try {
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` },
+    });
+    if (!resp.ok) {
+      console.warn(`[slack] Failed to fetch thread PDF ${chosen.file.id}: HTTP ${resp.status}`);
+      return null;
+    }
+    buffer = Buffer.from(await resp.arrayBuffer());
+  } catch (err) {
+    console.warn(`[slack] Thread PDF fetch threw for ${chosen.file.id}: ${err.message}`);
+    return null;
+  }
+
+  return {
+    buffer,
+    filename: chosen.file.name || chosen.file.title || 'evidence.pdf',
+    file_id: chosen.file.id,
+    posted_at: chosen.posted_at,
+  };
+}
+
+/**
  * Decode the modal's private_metadata back into a dispute object plus the
  * Slack channel/message coordinates needed to update the original review.
  */
