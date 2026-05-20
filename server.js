@@ -7,6 +7,11 @@ import { stripe as getStripe } from './integrations/stripe.js';
 import { submitEvidence } from './integrations/stripe.js';
 import { investigateDispute, analyseDispute } from './agent/index.js';
 import {
+  analyseExhibits,
+  formatExhibitDescription,
+  sortByRelevance,
+} from './agent/exhibit_analyser.js';
+import {
   getDisputeState,
   updateMessage,
   postFollowUp,
@@ -316,13 +321,17 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
     return;
   }
 
-  // Parse per-file descriptions (one line per file, in upload order).
+  // Parse per-file descriptions (one line per file, in upload order). When
+  // every line is blank, we switch to auto-mode and ask Gemini Vision to
+  // describe each image. Mixed mode is also supported: a non-blank line
+  // overrides the auto description for that file.
   const descriptionsText =
     view.state.values?.descriptions_block?.descriptions_input?.value || '';
   const descriptionLines = descriptionsText.split('\n');
+  const hasAnyManualDescription = descriptionLines.some((l) => l.trim().length > 0);
 
   console.log(
-    `[server] Evidence upload: ${dispute.id} — ${files.length} file(s) by user ${body.user?.id}`
+    `[server] Evidence upload: ${dispute.id} — ${files.length} file(s) by user ${body.user?.id} (mode: ${hasAnyManualDescription ? 'manual/mixed' : 'auto'})`
   );
 
   try {
@@ -335,7 +344,7 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
 
     // Fetch each file as a Buffer via Slack's authenticated download URL.
     // Requires the bot token to have `files:read` scope.
-    const exhibits = [];
+    const fetchedFiles = []; // { buffer, filename, manualDescription }
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       const url = f.url_private_download || f.url_private;
@@ -351,12 +360,75 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
         continue;
       }
       const buffer = Buffer.from(await resp.arrayBuffer());
-      const description = (descriptionLines[i] || '').trim() || f.title || f.name || '';
-      exhibits.push({ description, source: buffer });
+      const manual = (descriptionLines[i] || '').trim();
+      fetchedFiles.push({
+        buffer,
+        filename: f.name || f.title || `exhibit-${i + 1}`,
+        manualDescription: manual,
+      });
     }
 
-    if (exhibits.length === 0) {
+    if (fetchedFiles.length === 0) {
       throw new Error('All file fetches failed — check bot has files:read scope');
+    }
+
+    // Auto-describe via Gemini Vision when any file lacks a manual line.
+    // Sends the dispute analysis as context so the descriptions are framed
+    // in merchant-counter terms (e.g. references the admission detected by
+    // the agent, the rebuttal strategy, etc.). Falls back to filename-based
+    // descriptions if the vision call fails.
+    const needsAuto = fetchedFiles.some((f) => !f.manualDescription);
+    let visionRecords = null;
+    if (needsAuto) {
+      try {
+        visionRecords = await analyseExhibits({
+          images: fetchedFiles.map((f) => ({ filename: f.filename, buffer: f.buffer })),
+          dispute,
+          analysis: result.analysis,
+          booking: result.booking,
+        });
+      } catch (err) {
+        console.error('[server] analyseExhibits threw (non-fatal):', err.message);
+      }
+    }
+
+    // Assemble exhibits[]. For each fetched file: manual line wins; else
+    // vision record; else filename fallback. When vision succeeded for the
+    // whole set with no manual overrides, sort by relevance so the PDF
+    // leads with the strongest exhibits.
+    const exhibits = fetchedFiles.map((f, i) => {
+      let description;
+      let relevance = null;
+      if (f.manualDescription) {
+        description = f.manualDescription;
+      } else if (visionRecords?.[i]) {
+        description = formatExhibitDescription(visionRecords[i]);
+        relevance = visionRecords[i].relevance;
+      } else {
+        description = f.filename || `Exhibit ${i + 1}`;
+      }
+      return { description, source: f.buffer, _relevance: relevance, _origIndex: i };
+    });
+
+    // When vision drove every description, order PDF exhibits HIGH-relevance
+    // first. Manual mode leaves upload order intact.
+    if (visionRecords && !hasAnyManualDescription) {
+      const sortedVisionRecords = sortByRelevance(visionRecords);
+      const byOrigIndex = new Map(exhibits.map((e) => [e._origIndex, e]));
+      const reordered = sortedVisionRecords.map((r) => byOrigIndex.get(r.index));
+      exhibits.splice(0, exhibits.length, ...reordered);
+      console.log(
+        `[server] Exhibits reordered by relevance: ` +
+          sortedVisionRecords
+            .map((r) => `${r.filename}=${r.relevance}`)
+            .join(', ')
+      );
+    }
+
+    // Strip the private fields before passing downstream
+    for (const e of exhibits) {
+      delete e._relevance;
+      delete e._origIndex;
     }
 
     const customerName = `${result.booking.first_name || ''} ${result.booking.last_name || ''}`.trim() || 'Cardholder';

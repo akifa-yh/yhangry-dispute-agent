@@ -54,8 +54,17 @@ export async function fetchDisputeFromEitherAccount(disputeId) {
 }
 
 export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
-  // Step 1: Upload docx
-  const file = await getStripe().files.create({
+  // Determine which Stripe account owns this dispute (UK or US). Both the
+  // file upload AND the disputes.update must use the same client — file IDs
+  // are account-scoped, so uploading to UK then attaching to a US dispute
+  // returns 400. Without this routing, submitEvidence silently fails on
+  // every US dispute (e.g. du_1TRlR1Bwio2AEm6ZNSo3pckc, May 2026).
+  const { account } = await fetchDisputeFromEitherAccount(disputeId);
+  const stripeClient = account === 'us' ? getStripeUs() : getStripeUk();
+  console.log(`[stripe] submitEvidence routing dispute ${disputeId} via ${account.toUpperCase()} account`);
+
+  // Step 1: Upload docx (file is account-scoped — must match dispute account)
+  const file = await stripeClient.files.create({
     purpose: 'dispute_evidence',
     file: {
       data: docxBuffer,
@@ -64,10 +73,10 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
     },
   });
 
-  console.log(`[stripe] Uploaded evidence file ${file.id} for dispute ${disputeId}`);
+  console.log(`[stripe] Uploaded evidence file ${file.id} for dispute ${disputeId} (${account})`);
 
   // Step 2: Submit evidence
-  await getStripe().disputes.update(disputeId, {
+  await stripeClient.disputes.update(disputeId, {
     evidence: {
       product_description:
         `Private chef dining experience — multi-course meal prepared and served at customer's home. Booking ref: ${booking.order_id}`,
@@ -82,5 +91,5 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
     // TODO: flip to true when ready to go live
   });
 
-  console.log(`[stripe] Evidence submitted (submit=false) for dispute ${disputeId}`);
+  console.log(`[stripe] Evidence submitted (submit=false) for dispute ${disputeId} (${account})`);
 }

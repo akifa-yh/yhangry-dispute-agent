@@ -212,7 +212,7 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: 'Upload screenshots (JPG/PNG) of supporting evidence — emails, receipts, booking confirmations, etc. Each becomes a dedicated page in the merchant response PDF, after the standard analysis pages.',
+            text: 'Upload screenshots (JPG/PNG) of supporting evidence — emails, receipts, dashboard views, etc. Each becomes a dedicated page in the merchant response PDF.\n\n*Leave the descriptions field blank* and the agent will use Gemini Vision to identify each image and write the *Document* and *Proves* lines for you, framed against the current rebuttal strategy. Fill it in only if you want to override the auto-descriptions.',
           },
         },
         { type: 'divider' },
@@ -231,10 +231,10 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
           type: 'input',
           block_id: 'descriptions_block',
           optional: true,
-          label: { type: 'plain_text', text: 'Descriptions (optional)' },
+          label: { type: 'plain_text', text: 'Descriptions (optional — blank = auto)' },
           hint: {
             type: 'plain_text',
-            text: 'One per line, in upload order. Use ":" or "—" to split the document name from what it proves. Example: "Cardholder admission email: Customer admits dispute was filed in error". Blank lines fall back to filename.',
+            text: 'Leave blank to let the agent auto-describe each file via Gemini Vision. To override: one line per file in upload order, format "Document — what it proves". Blank lines within mean auto-describe that file.',
           },
           element: {
             type: 'plain_text_input',
@@ -244,7 +244,7 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
             placeholder: {
               type: 'plain_text',
               // Slack's plain_text_input placeholder caps at 150 chars — keep short.
-              text: 'Receipt: £520 GBP charged\nAdmission email: customer admits error',
+              text: 'Leave blank to auto-describe via Gemini Vision',
             },
           },
         },
