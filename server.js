@@ -99,10 +99,12 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
 
   // Try in-memory state first; if missing (Render idle-sleep wiped it),
   // re-run the investigation from scratch so we have analysis + booking +
-  // messages + contacts to feed into evidence generation.
+  // messages + contacts to feed into evidence generation. If state DOES
+  // exist and includes a narrative from a prior Update Narrative click,
+  // the cached analysis already incorporates it — no need to redo work.
   let state = getDisputeState(dispute.id);
   if (!state) {
-    console.log(`[server] approve_dispute: state miss for ${dispute.id}, re-analysing from button payload`);
+    console.log(`[server] approve_dispute: state miss for ${dispute.id}, re-analysing cold (no narrative recovery possible)`);
     try {
       const result = await analyseDispute(dispute);
       if (!result.booking) throw new Error(`Booking lookup failed for ${dispute.payment_intent}`);
@@ -337,7 +339,23 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
   try {
     // Re-run analysis for fresh booking/messages/contacts. The in-memory
     // state Map can be stale on Render free tier, so we always re-fetch.
-    const result = await analyseDispute(dispute);
+    //
+    // CRITICAL: preserve the narrative from the previous Update Narrative
+    // click. Without it, this fresh analyseDispute runs without the
+    // narrative context and can miss admission detection (this bit the
+    // Khushbu Aggarwal $50 case 2026-05-20 — first PDF had admission
+    // framing from the narrative-driven analysis; second PDF after Upload
+    // Evidence regressed to LATE_COMPLAINT framing because narrative was
+    // dropped). Keep-warm cron usually keeps state alive between clicks,
+    // but we fall back gracefully if state has been wiped.
+    const priorState = getDisputeState(dispute.id);
+    const cachedNarrative = priorState?.narrative || null;
+    if (cachedNarrative) {
+      console.log(`[server] upload_evidence: re-analysing with cached narrative (${cachedNarrative.length} chars) for ${dispute.id}`);
+    } else {
+      console.log(`[server] upload_evidence: no cached narrative for ${dispute.id}, re-analysing cold`);
+    }
+    const result = await analyseDispute(dispute, cachedNarrative ? { narrative: cachedNarrative } : {});
     if (!result.booking) {
       throw new Error(`Booking lookup failed for ${dispute.payment_intent}`);
     }
