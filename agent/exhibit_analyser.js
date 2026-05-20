@@ -71,15 +71,33 @@ export async function analyseExhibits({ images, dispute, analysis, booking }) {
 
   const promptText = `You are analysing image exhibits for a Stripe payment dispute counter-submission.
 
-DISPUTE CONTEXT:
+CRITICAL OUTPUT RULE — NO INTERNAL JARGON:
+The document_label and proves text you produce will be printed in the PDF
+submitted to the cardholder's bank reviewer. NEVER include any internal ops
+vocabulary in those strings, including but not limited to:
+  - Rebuttal strategy enum names (CUSTOMER_INITIATED, DEADLINE,
+    SERVICE_RENDERED, CLAIM_BY_CLAIM, PRE_EVENT_CONTACT,
+    ACCEPT_STOLEN_CARD, CUSTOMER_ADMISSION)
+  - Field/flag names (customer_admission_detected, rebuttal_strategy,
+    evidence_strength, customer_claims, claim_analysis, etc.)
+  - Recommendation enum values (STRONG_COUNTER, COUNTER_WITH_CAVEATS,
+    ACCEPT, ESCALATE)
+  - Agent process language ("agent's reasoning", "agent recommendation",
+    "Image N" cross-refs, "as seen in Image 8", etc.)
+
+Write in plain English merchant-counter framing. The reviewer should read
+the proves line and understand what the document shows + why it helps the
+merchant, without any indication that an internal tool produced it.
+
+DISPUTE CONTEXT (for your reasoning only — do NOT quote in output):
 - Dispute ID: ${dispute.id}
 - Amount: $${((dispute.amount || 0) / 100).toFixed(2)}
 - Stripe reason: ${dispute.reason || 'N/A'}
 - Network reason code: ${dispute.network_reason_code || 'N/A'}
 - Customer: ${customerName || 'unknown'}
-- Agent recommendation: ${analysis?.recommendation || 'N/A'}
-- Rebuttal strategy: ${analysis?.rebuttal_strategy || 'N/A'}
-- Agent reasoning (truncated): ${reasoning}
+- Internal recommendation: ${analysis?.recommendation || 'N/A'}
+- Internal rebuttal strategy: ${analysis?.rebuttal_strategy || 'N/A'}
+- Internal reasoning (truncated): ${reasoning}
 - Suggested rebuttal points: ${rebuttalPoints}
 ${admissionQuote ? `- Cardholder admission text on record: "${admissionQuote}"` : ''}
 
@@ -113,6 +131,14 @@ I will provide ${images.length} image${images.length === 1 ? '' : 's'}. For EACH
                   disputing this charge")
                 ✓ HIGH: issuer's dashboard screenshot showing dispute
                   status = Closed/Resolved
+                ✓ HIGH: cardholder-sent emails to the merchant where the
+                  cardholder is furnishing proof of withdrawal —
+                  forwarding the issuer's confirmation letter, attaching
+                  a dashboard screenshot, providing a clearer screenshot
+                  after merchant request. These reinforce the admission
+                  with the cardholder's own act of actively proving
+                  withdrawal; they are equally load-bearing as the bare
+                  "I have cancelled" sentence and belong in the pack.
                 ✗ NOT HIGH: refund-attempt-failed logs, merchant emails
                   back to customer, follow-up "any updates?" emails,
                   initial complaint emails, goodwill offers — these are
