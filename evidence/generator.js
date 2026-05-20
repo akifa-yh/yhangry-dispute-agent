@@ -786,8 +786,15 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // 3-bullet rebuttal section
   drawRebuttalBullets(doc, analysis);
 
-  // Compact timeline
-  drawCompactTimeline(doc, analysis, dispute, booking);
+  // Compact timeline — anchored on deadline-argument events (first complaint
+  // contact, T&C deadline). Hidden when the rebuttal hinges on a customer
+  // admission, since the deadline is moot in that framing — the BOTTOM_LINE
+  // callout already gives the punchline and rebuttal bullets carry the
+  // narrative. Added 2026-05-20 after the Khushbu Aggarwal PDF showed a
+  // deadline-focused timeline on an admission-driven case.
+  if (!analysis.customer_admission_detected) {
+    drawCompactTimeline(doc, analysis, dispute, booking);
+  }
 
   // Build the unified list of attached exhibits in render order. Letters
   // assigned here are reused on each exhibit's page header so the page-1

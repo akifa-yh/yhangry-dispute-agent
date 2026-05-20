@@ -98,16 +98,59 @@ I will provide ${images.length} image${images.length === 1 ? '' : 's'}. For EACH
                     to the rebuttal_strategy above. Do NOT describe the image
                     generically; speak in merchant-counter framing.
 
-  relevance       — one of:
-    HIGH    — directly evidences a key rebuttal point (cardholder admission,
-              issuer's dispute-withdrawal confirmation, Stripe refund-failed
-              event log, written settlement agreement)
-    MEDIUM  — supportive context (booking confirmation, payment receipt,
-              generic correspondence between merchant and customer)
-    LOW     — tangential — weak connection to the dispute or the rebuttal
-              strategy
-    NONE    — irrelevant or unidentifiable (e.g. wrong customer, off-topic
-              screenshot)
+  relevance       — be SPARING with HIGH. Most cases only need 2-4 HIGH
+                    exhibits — the actual smoking guns for the rebuttal
+                    strategy. Score one of:
+
+    HIGH    — DIRECTLY evidences the LOAD-BEARING argument of the
+              rebuttal_strategy. Examples by strategy:
+
+              CUSTOMER_ADMISSION (or admission detected):
+                ✓ HIGH: cardholder's own admission email saying they
+                  cancelled/withdrew the dispute
+                ✓ HIGH: issuer's letter confirming dispute closure / re-
+                  billing (e.g. American Express "you are no longer
+                  disputing this charge")
+                ✓ HIGH: issuer's dashboard screenshot showing dispute
+                  status = Closed/Resolved
+                ✗ NOT HIGH: refund-attempt-failed logs, merchant emails
+                  back to customer, follow-up "any updates?" emails,
+                  initial complaint emails, goodwill offers — these are
+                  context, not load-bearing for admission
+
+              DEADLINE:
+                ✓ HIGH: cancellation/refund policy disclosure (T&Cs page),
+                  first-contact timing log relative to deadline,
+                  click-to-accept screenshot
+                ✗ NOT HIGH: chef survey, platform chat history
+
+              SERVICE_RENDERED:
+                ✓ HIGH: chef post-event survey, GPS check-in, day-of
+                  customer acknowledgement
+                ✗ NOT HIGH: menu negotiation messages, booking confirmation
+
+              CUSTOMER_INITIATED:
+                ✓ HIGH: customer-sent platform messages initiating the
+                  booking, customer signing/checkout proof
+                ✗ NOT HIGH: chef-sent messages, generic order details
+
+    MEDIUM  — supportive context that strengthens the case but doesn't
+              ALONE win the argument. Most exhibits land here when not
+              load-bearing. Examples: booking confirmation, payment
+              receipt, customer-merchant correspondence around the
+              dispute, merchant's resolution-attempt emails, refund
+              attempt logs, follow-up emails.
+
+    LOW     — tangential — weak connection to the dispute or the
+              rebuttal strategy. Don't pad the submission with LOW.
+
+    NONE    — irrelevant or unidentifiable (e.g. wrong customer, off-
+              topic screenshot, blurry image we can't read).
+
+Calibration check: if you're scoring 5+ exhibits HIGH on a single case,
+you're probably being too generous. Re-read the rebuttal_strategy and
+ask "would this exhibit, by itself, persuade the bank reviewer?" If
+no, it's MEDIUM at best.
 
 Output STRICT JSON ARRAY only — one entry per image, in upload order. No
 preamble outside the JSON. Schema:
