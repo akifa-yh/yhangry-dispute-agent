@@ -289,12 +289,20 @@ slackApp.action('upload_evidence', async ({ action, ack, body }) => {
     console.error('[server] upload_evidence: bad button payload', action.value);
     return;
   }
+  // Read cached narrative (if Update Narrative was clicked earlier in this
+  // session AND state survived idle-sleep) and pre-fill the modal's
+  // narrative field with it. Lets ops use Upload Evidence as a one-stop
+  // shop without re-pasting on the common path; falls back to an empty
+  // editable field if state is gone.
+  const cachedState = getDisputeState(dispute.id);
+  const cachedNarrative = cachedState?.narrative || null;
   try {
     await openEvidenceUploadModal({
       triggerId: body.trigger_id,
       dispute,
       channelId,
       messageTs,
+      cachedNarrative,
     });
   } catch (err) {
     console.error(`[server] Failed to open upload modal for ${dispute.id}:`, err);
@@ -337,25 +345,38 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
   );
 
   try {
-    // Re-run analysis for fresh booking/messages/contacts. The in-memory
-    // state Map can be stale on Render free tier, so we always re-fetch.
+    // Re-run analysis for fresh booking/messages/contacts. The narrative
+    // can come from three places (in priority order):
+    //   1. The modal's narrative field (what ops just submitted) — most
+    //      authoritative; survives Render idle-sleep because it travels
+    //      in the view submission.
+    //   2. Cached disputeState.narrative — only useful when ops didn't
+    //      retype anything and state survived since the prior Update
+    //      Narrative click.
+    //   3. Empty — cold re-analysis with Gmail/booking signals only.
     //
-    // CRITICAL: preserve the narrative from the previous Update Narrative
-    // click. Without it, this fresh analyseDispute runs without the
-    // narrative context and can miss admission detection (this bit the
-    // Khushbu Aggarwal $50 case 2026-05-20 — first PDF had admission
-    // framing from the narrative-driven analysis; second PDF after Upload
-    // Evidence regressed to LATE_COMPLAINT framing because narrative was
-    // dropped). Keep-warm cron usually keeps state alive between clicks,
-    // but we fall back gracefully if state has been wiped.
+    // The Khushbu Aggarwal $50 case 2026-05-20 was the canonical regression
+    // that drove this: idle-sleep wiped state between Update Narrative and
+    // Upload Evidence (1m44s apart), the agent re-analysed cold, missed
+    // admission detection, and the PDF regressed from admission-framed to
+    // LATE_COMPLAINT-framed. The modal field makes that impossible.
+    const modalNarrative = (
+      view.state.values?.upload_narrative_block?.upload_narrative_input?.value || ''
+    ).trim();
     const priorState = getDisputeState(dispute.id);
     const cachedNarrative = priorState?.narrative || null;
-    if (cachedNarrative) {
-      console.log(`[server] upload_evidence: re-analysing with cached narrative (${cachedNarrative.length} chars) for ${dispute.id}`);
-    } else {
-      console.log(`[server] upload_evidence: no cached narrative for ${dispute.id}, re-analysing cold`);
-    }
-    const result = await analyseDispute(dispute, cachedNarrative ? { narrative: cachedNarrative } : {});
+    const narrativeToUse = modalNarrative || cachedNarrative || null;
+    const narrativeSource = modalNarrative
+      ? 'modal'
+      : cachedNarrative
+      ? 'cached-state'
+      : 'none';
+    console.log(
+      `[server] upload_evidence: narrative source=${narrativeSource}` +
+        (narrativeToUse ? ` (${narrativeToUse.length} chars)` : '') +
+        ` for ${dispute.id}`
+    );
+    const result = await analyseDispute(dispute, narrativeToUse ? { narrative: narrativeToUse } : {});
     if (!result.booking) {
       throw new Error(`Booking lookup failed for ${dispute.payment_intent}`);
     }

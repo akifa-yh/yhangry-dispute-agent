@@ -185,7 +185,7 @@ export async function openNarrativeModal({ triggerId, dispute, channelId, messag
  * @param {string} args.channelId
  * @param {string} args.messageTs
  */
-export async function openEvidenceUploadModal({ triggerId, dispute, channelId, messageTs }) {
+export async function openEvidenceUploadModal({ triggerId, dispute, channelId, messageTs, cachedNarrative }) {
   const meta = JSON.stringify({
     d: {
       id: dispute.id,
@@ -197,6 +197,13 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
     c: channelId,
     t: messageTs,
   });
+
+  // Pre-fill the in-modal narrative field from the cached narrative (if
+  // any) so the operator doesn't have to re-paste it. This is the
+  // resilient path: if Render's idle-sleep wiped disputeState between the
+  // Update Narrative click and this Upload Evidence click, cachedNarrative
+  // will be empty and the operator can paste fresh.
+  const initialNarrative = (cachedNarrative || '').slice(0, 3000);
 
   await web().views.open({
     trigger_id: triggerId,
@@ -245,6 +252,27 @@ export async function openEvidenceUploadModal({ triggerId, dispute, channelId, m
               type: 'plain_text',
               // Slack's plain_text_input placeholder caps at 150 chars — keep short.
               text: 'Leave blank to auto-describe via Gemini Vision',
+            },
+          },
+        },
+        {
+          type: 'input',
+          block_id: 'upload_narrative_block',
+          optional: true,
+          label: { type: 'plain_text', text: 'Customer narrative (optional — pre-filled if pasted earlier)' },
+          hint: {
+            type: 'plain_text',
+            text: 'Same field as Paste Narrative / Upload VROL — controls the rebuttal framing (admission detection, claim parsing). Pre-filled here if you pasted it earlier in this session. Leave as-is to reuse, edit to refine, or blank for a cold analysis.',
+          },
+          element: {
+            type: 'plain_text_input',
+            action_id: 'upload_narrative_input',
+            multiline: true,
+            max_length: 3000,
+            ...(initialNarrative ? { initial_value: initialNarrative } : {}),
+            placeholder: {
+              type: 'plain_text',
+              text: 'Paste customer narrative here, or leave blank',
             },
           },
         },

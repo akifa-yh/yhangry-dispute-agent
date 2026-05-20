@@ -486,12 +486,40 @@ CARDHOLDER themselves. Specifically:
     customer_admission_evidence must come from a cardholder-sent
     email body.
 
-When you detect an admission:
+VALID SOURCES FOR THE ADMISSION QUOTE:
+You may extract customer_admission_evidence from EITHER of these sources
+(in priority order):
+
+  (a) PRIMARY — A cardholder-sent email body in the GMAIL CORRESPONDENCE
+      section. Verify the From: header is the cardholder's address
+      before extracting. This is the strongest source.
+
+  (b) FALLBACK — The CUSTOMER NARRATIVE section, when ops has
+      explicitly attributed a verbatim cardholder quote to a specific
+      cardholder email. Example attribution patterns that qualify:
+        "Customer email dated 30 Apr: 'I have cancelled the dispute'"
+        "On 30 Apr the cardholder emailed us saying 'I have cancelled
+          the dispute' — From: <her gmail address>"
+        "Her own email Apr 30 quotes: 'I have cancelled the dispute'"
+
+      The quote MUST be enclosed in quotation marks and attributed to a
+      cardholder-sent email in the narrative. Paraphrases or summaries
+      WITHOUT a direct quoted phrase do NOT qualify under (b). yhangry's
+      own emails to the customer — even when they describe a
+      withdrawal — never qualify (always (a)-with-wrong-sender or
+      paraphrase-without-quote).
+
+      Path (b) exists because the Gmail integration only returns the
+      most recent N messages — older but critical emails (like an early
+      admission) can be excluded from the fetched set even when they
+      exist. Ops compensates by quoting them in the narrative.
+
+When you detect an admission via (a) or (b):
   1. Set customer_admission_detected: true
   2. Quote the exact admission text (1-2 sentences max, verbatim) into
-     customer_admission_evidence. The quote MUST be copied from a
-     cardholder-sent email body — verify the From: header before
-     extracting.
+     customer_admission_evidence. Mention the source in your reasoning
+     (e.g. "Source: Gmail email from cardholder dated 30 Apr 2026" or
+     "Source: ops narrative quoting cardholder email dated 30 Apr 2026").
   3. The admission OVERRIDES whatever rebuttal strategy you would have
      picked otherwise — make this evidence the leading argument
   4. Add it to evidence_to_include with strategic_priority: PRIMARY,
@@ -499,11 +527,10 @@ When you detect an admission:
      cardholder's own written acknowledgement
   5. In reasoning, lead with the admission
 
-If no admission is present (or the Gmail section is empty), or every
-candidate admission phrase appears only in yhangry-sent emails, set
+If no admission is present under EITHER (a) or (b), set
 customer_admission_detected: false and leave customer_admission_evidence
-empty/null. Do NOT fabricate admissions — only quote actual text from
-cardholder-sent Gmail emails.
+empty/null. Do NOT fabricate admissions or paraphrase yhangry's own
+statements as cardholder words.
 
 PRE-EVENT DISPUTE HANDLING:
 The user message includes a PRE-EVENT CONTEXT block stating whether the

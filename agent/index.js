@@ -218,7 +218,15 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   try {
     gmailMessages = await fetchCustomerCorrespondence(booking.customer_email, {
       daysBack: 90,
-      maxMessages: 10,
+      // Bumped from 10 → 30 on 2026-05-20 after the Khushbu Aggarwal case:
+      // her admission email ("I have cancelled the dispute", 30 Apr) was
+      // outside the 10-most-recent window in a thread of ~19 emails (May
+      // follow-ups crowded it out), so Gemini couldn't quote it for
+      // customer_admission_detected. 30 covers typical multi-week customer
+      // back-and-forths with margin. Body cap stays at 4000 chars each, so
+      // worst-case prompt growth is ~120k chars — well under Flash's 1M+
+      // context window.
+      maxMessages: 30,
     });
   } catch (err) {
     console.warn('[agent] Gmail fetch failed (non-fatal):', err.message);
