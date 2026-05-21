@@ -778,25 +778,84 @@ app.post(
     // Stripe keeps retrying.
     res.status(200).json({ received: true });
 
-    // Only process dispute.created events
-    if (event.type !== 'charge.dispute.created') {
-      return;
-    }
-
     // Idempotency: skip if we've already processed this Stripe event id
     // within the TTL window. Catches retries from cold-start timeouts.
     if (alreadyProcessedStripeEvent(event.id)) {
-      console.log(`[stripe] Skipping duplicate event ${event.id} (dispute ${event.data.object.id})`);
+      console.log(`[stripe] Skipping duplicate event ${event.id} (${event.type})`);
       return;
     }
 
-    const dispute = event.data.object;
-    console.log(`[stripe] Received dispute: ${dispute.id}`);
-
-    // Process asynchronously. Errors are surfaced to Slack via the helper.
-    investigateDispute(dispute).catch((err) => reportInvestigationError('webhook', dispute, err));
+    // Route by event type. Other event types we don't subscribe to either
+    // never reach here (Stripe dashboard filter) or we silently ignore.
+    if (event.type === 'charge.dispute.created') {
+      const dispute = event.data.object;
+      console.log(`[stripe] Received dispute: ${dispute.id}`);
+      investigateDispute(dispute).catch((err) =>
+        reportInvestigationError('webhook', dispute, err)
+      );
+    } else if (event.type === 'charge.dispute.closed') {
+      // Post the actual financial outcome (per Stripe's API view) to
+      // #stripe-disputes. Added 2026-05-21 after the Katie Robertson Visa
+      // 12.5 case where Stripe's "lost" label was a known UI lag and the
+      // real money picture only surfaced via balance_transactions. The
+      // helper formats both the formal status AND the API-derived net,
+      // flagging cases where the two disagree so ops can spot Stripe's
+      // delayed accounting (Katie-style) at a glance.
+      const dispute = event.data.object;
+      console.log(`[stripe] Dispute closed: ${dispute.id} (formal status: ${dispute.status})`);
+      handleDisputeClosed(dispute).catch((err) =>
+        reportInvestigationError('webhook-closed', dispute, err)
+      );
+    } else {
+      // Other event types reach here only if the Stripe webhook config
+      // subscribes to them — ignore silently. Logged below for future debug
+      // if someone adds a subscription without updating this dispatcher.
+      console.log(`[stripe] Ignoring unhandled event type: ${event.type}`);
+    }
   }
 );
+
+/**
+ * Handle a charge.dispute.closed webhook by deriving the actual financial
+ * outcome from the Stripe API and posting it to #stripe-disputes (threaded
+ * under the original dispute review when found, top-level otherwise).
+ */
+async function handleDisputeClosed(dispute) {
+  const { getDisputeFinancialOutcome } = await import('./integrations/stripe.js');
+  const { postDisputeOutcome } = await import('./integrations/slack.js');
+
+  // The dispute object on the webhook event is canonical for status but
+  // may not carry the full balance_transactions array — re-fetch via the
+  // helper to ensure we have the latest financial picture.
+  const outcome = await getDisputeFinancialOutcome(dispute.id);
+
+  // Best-effort booking lookup for the customer-name display. Won't always
+  // work (gift-card disputes have no BigQuery booking, see #18 Phase 2) —
+  // fall back to "unknown customer" in that case.
+  let booking = null;
+  try {
+    const { getBookingByPaymentId, getBookingByOrderId } = await import(
+      './integrations/bigquery.js'
+    );
+    booking = await getBookingByPaymentId(dispute.payment_intent || dispute.charge);
+    if (!booking) {
+      const { fetchChargeFromEitherAccount } = await import('./integrations/stripe.js');
+      try {
+        const { charge } = await fetchChargeFromEitherAccount(dispute.charge);
+        const orderId = charge?.metadata?.order_id;
+        if (orderId) booking = await getBookingByOrderId(orderId);
+      } catch {}
+    }
+  } catch (err) {
+    console.warn(`[webhook-closed] Booking lookup failed for ${dispute.id} (non-fatal): ${err.message}`);
+  }
+
+  await postDisputeOutcome({ outcome, booking });
+  console.log(
+    `[webhook-closed] Posted outcome for ${dispute.id} — formal=${outcome.formalStatus}, ` +
+      `net=${outcome.netDisplay} (${outcome.impliedOutcome}), disagrees=${outcome.statusDisagreesWithApi}`
+  );
+}
 
 // Health check
 app.get('/health', (req, res) => {

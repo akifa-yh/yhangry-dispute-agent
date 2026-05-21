@@ -530,6 +530,111 @@ export async function postFollowUp(threadTs, text) {
   });
 }
 
+/**
+ * Locate the bot's original dispute-review post in #stripe-disputes by
+ * searching for the dispute id. Returns the message ts so subsequent
+ * outcome posts can thread under the same review. Returns null if not
+ * found (e.g. very old disputes pre-this-feature, or search is rate
+ * limited).
+ *
+ * Uses search.messages which requires `search:read`. If the scope is
+ * missing OR search returns nothing, the caller should post a standalone
+ * message in the channel as fallback.
+ */
+export async function findDisputeReviewMessageTs(disputeId) {
+  try {
+    const res = await web().search.messages({
+      query: `${disputeId} in:<#${channelId()}>`,
+      count: 5,
+      sort: 'timestamp',
+      sort_dir: 'asc',
+    });
+    const matches = res?.messages?.matches || [];
+    // Prefer the earliest match (the original review post). Filter to bot's
+    // posts only to avoid threading under an ops message.
+    for (const m of matches) {
+      if (m.username?.toLowerCase().includes('dispute agent') ||
+          m.user === process.env.SLACK_BOT_USER_ID ||
+          (m.text || '').includes('[DISPUTE]')) {
+        return m.ts;
+      }
+    }
+    if (matches[0]) return matches[0].ts;
+    return null;
+  } catch (err) {
+    console.warn(`[slack] findDisputeReviewMessageTs failed for ${disputeId}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Post a dispute's final outcome (post-resolution) to #stripe-disputes.
+ * Threads under the original review when found, falls back to a new
+ * top-level message otherwise.
+ *
+ * The outcome shape is whatever getDisputeFinancialOutcome returns:
+ *   { disputeId, formalStatus, netCents, netDisplay, impliedOutcome,
+ *     transactions, statusDisagreesWithApi, currency, account }
+ */
+export async function postDisputeOutcome({ outcome, booking }) {
+  const customerName = booking
+    ? `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || 'unknown customer'
+    : 'unknown customer';
+  const formal = (outcome.formalStatus || 'unknown').toUpperCase();
+  const formalEmoji =
+    outcome.formalStatus === 'won' ? ':white_check_mark:' :
+    outcome.formalStatus === 'lost' ? ':red_circle:' :
+    outcome.formalStatus === 'warning_closed' ? ':no_entry_sign:' :
+    ':information_source:';
+
+  const lines = [
+    `${formalEmoji} *Dispute resolved* — \`${outcome.disputeId}\` (${customerName})`,
+    `*Formal status:* ${formal}`,
+    `*API-derived net to merchant:* ${outcome.netDisplay} (${outcome.impliedOutcome.replace(/_/g, ' ')})`,
+  ];
+
+  if (outcome.statusDisagreesWithApi) {
+    lines.push('');
+    lines.push(
+      ':warning: *Heads-up:* Formal status and API balance-transaction net disagree. ' +
+        'Stripe may apply account-level adjustments that don\'t surface as per-dispute ' +
+        'balance_transactions (this happened on Katie Robertson 2026-05-21). ' +
+        '*Verify the actual cash position in Stripe Dashboard → Balance → Payouts* — ' +
+        'the dashboard is authoritative when it disagrees with the API view here.'
+    );
+  }
+
+  if ((outcome.transactions || []).length > 0) {
+    lines.push('');
+    lines.push('*Balance transactions attached to this dispute:*');
+    for (const tx of outcome.transactions) {
+      const amt = `${outcome.currency.toUpperCase()} ${(tx.amount_cents / 100).toFixed(2)}`;
+      const net = `net ${(tx.net_cents / 100).toFixed(2)}`;
+      const fee = tx.fee_cents ? `, fee ${(tx.fee_cents / 100).toFixed(2)}` : '';
+      const ts = tx.created_iso || '?';
+      const desc = tx.description ? ` — _${tx.description}_` : '';
+      lines.push(`• \`${tx.id}\` · ${tx.type} · ${amt} (${net}${fee}) · ${ts}${desc}`);
+    }
+  } else {
+    lines.push('');
+    lines.push(
+      '_No balance_transactions attached to this dispute yet — Stripe may not ' +
+        'have recorded the financial side; check back later or verify in the dashboard._'
+    );
+  }
+
+  const text = lines.join('\n');
+  const threadTs = await findDisputeReviewMessageTs(outcome.disputeId);
+
+  await web().chat.postMessage({
+    channel: channelId(),
+    text,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+  });
+
+  return { posted: true, threadedUnder: threadTs || null };
+}
+
 // === Product gap alerts ===
 // Posts to #product-gaps channel when a tag has appeared in 3+ disputes
 // over the past 30 days. Channel id is read from

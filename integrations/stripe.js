@@ -53,6 +53,86 @@ export async function fetchDisputeFromEitherAccount(disputeId) {
   }
 }
 
+/**
+ * Derive a dispute's actual financial outcome from the Stripe API, separate
+ * from the dispute.status label.
+ *
+ * Why this exists: Stripe's `dispute.status` is the FORMAL Visa/Mastercard
+ * resolution state. It's the wrong signal for "did yhangry actually lose
+ * money?" — for example, customer-initiated bank withdrawals can return
+ * funds via a separate balance transaction even while `status === 'lost'`
+ * stays put for weeks/months until the formal Visa case closes. Conversely,
+ * a "won" dispute can still have an unrecovered fee. Surfaced 2026-05-21
+ * after the Katie Robertson Visa 12.5 case (du_1TSbuXJslp99M2l08y417Rqk):
+ * Stripe Support told ops "you didn't lose any money" but the formal status
+ * stayed "lost", and the dashboard balance vs API balance_transactions
+ * disagreed — exactly the kind of ambiguity ops shouldn't have to resolve
+ * by hand.
+ *
+ * What this returns: a structured summary of EVERY balance transaction
+ * attached to the dispute, the net cents (sum of `.net`), plus the formal
+ * status. Caller can then make an informed call about real-world outcome
+ * vs formal status, and surface the difference to ops when they diverge.
+ *
+ * Caveats — what this does NOT capture:
+ *   - Account-level offsetting credits that don't surface as a separate
+ *     dispute-attached balance_transaction (Stripe Support has applied
+ *     these in the past on Katie's case; not visible via this API path).
+ *   - Pending reversals that haven't yet posted as a balance_transaction.
+ *   - Re-charges to the customer or off-platform settlements.
+ * When the formal status and the net disagree with what ops sees in the
+ * dashboard, treat the dashboard as authoritative — this helper is one
+ * input, not the final word.
+ */
+export async function getDisputeFinancialOutcome(disputeId) {
+  const { dispute, account } = await fetchDisputeFromEitherAccount(disputeId);
+  const txns = dispute.balance_transactions || [];
+
+  const transactions = txns.map((tx) => ({
+    id: tx.id,
+    type: tx.type,
+    reporting_category: tx.reporting_category,
+    amount_cents: tx.amount,
+    fee_cents: tx.fee,
+    net_cents: tx.net,
+    currency: tx.currency,
+    description: tx.description || null,
+    created_iso: tx.created ? new Date(tx.created * 1000).toISOString() : null,
+    status: tx.status,
+  }));
+
+  const netCents = transactions.reduce((sum, t) => sum + (t.net_cents || 0), 0);
+
+  // Classify the implied financial outcome from the API's view, NOT from
+  // the formal status label. Lets callers spot disagreements between the
+  // two — which is the whole point of this helper.
+  let impliedOutcome;
+  if (transactions.length === 0) {
+    impliedOutcome = 'no_transactions'; // dispute not yet financially recorded
+  } else if (netCents < 0) {
+    impliedOutcome = 'merchant_lost'; // funds debited from merchant
+  } else if (netCents > 0) {
+    impliedOutcome = 'merchant_gained'; // funds returned (rare; usually netCents == 0 on a clean win)
+  } else {
+    impliedOutcome = 'merchant_neutral'; // initial debit + offsetting credit cleanly zero out
+  }
+
+  return {
+    disputeId,
+    account,
+    formalStatus: dispute.status,
+    dispute_amount_cents: dispute.amount,
+    currency: dispute.currency,
+    netCents,
+    netDisplay: `${dispute.currency.toUpperCase()} ${(netCents / 100).toFixed(2)}`,
+    impliedOutcome,
+    transactions,
+    statusDisagreesWithApi:
+      (dispute.status === 'lost' && netCents >= 0) ||
+      (dispute.status === 'won' && netCents < 0),
+  };
+}
+
 export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
   // Determine which Stripe account owns this dispute (UK or US). Both the
   // file upload AND the disputes.update must use the same client — file IDs
