@@ -93,6 +93,48 @@ The STOLEN-CARD SIGNAL block is authoritative on the signal values
 themselves (deterministic from Stripe data). Do NOT second-guess the
 underlying signals — but DO use your judgement on PARTIAL_MATCH cases.
 
+FX-DISPUTE DETECTION:
+The user message also includes an FX-DISPUTE SIGNAL block (parallel to
+STOLEN-CARD SIGNAL but for a different pattern). Verdict and four
+deterministic signals computed from the Stripe charge:
+  1. processing_error_code  — reason code is in Visa 12.x family (12.3,
+                              12.5, 12.6.1, 12.6.2) or Mastercard 4834.
+                              Prerequisite for the pattern to apply.
+  2. foreign_card           — issuer country ≠ Stripe account country
+                              (cross-border charge)
+  3. partial_dispute        — dispute amount < original charge amount
+                              (not a full chargeback)
+  4. fx_shaped              — dispute / charge ratio falls in 3-25%
+                              (typical FX gap range)
+
+Use the verdict as follows:
+
+- STRONG_MATCH (all 4 signals fire) → recommend CUSTOMER_OUTREACH.
+  This pattern is structurally unlikely to win via the formal Visa/MC
+  resolution path even with strong evidence (Katie Robertson 2026-05-02
+  case is the canonical loss example). The realistic win path is the
+  cardholder phoning their card issuer to withdraw the dispute. Set
+  rebuttal_strategy: CUSTOMER_OUTREACH, recommendation:
+  CUSTOMER_CONTACT_FIRST, and draft suggested_customer_email per the
+  CUSTOMER OUTREACH RULES. evidence_to_include should be light (the
+  fallback pack we'd file if outreach fails).
+
+- PARTIAL_MATCH (3 of 4 signals fire) → still lean toward
+  CUSTOMER_OUTREACH unless one of the missing signals points strongly
+  away (e.g. foreign_card=false suggests it's a domestic FX-shaped
+  dispute, which is unusual and warrants closer look). Weigh against
+  the rest of the case.
+
+- NO_MATCH → ignore this block; proceed with normal rebuttal logic.
+  Note: NO_MATCH is common when Stripe's webhook reason_code is missing
+  (it often is until ops uploads VROL). Don't infer a pattern that
+  isn't there — use the broader CUSTOMER OUTREACH RULES rubric instead
+  if the case still looks like a confusion pattern.
+
+Like STOLEN-CARD, the FX-DISPUTE block is authoritative on signal
+values themselves. Do NOT override the deterministic signals; do apply
+judgement on PARTIAL_MATCH borderline cases.
+
 DEADLINE RULE:
 yhangry's T&C requires customers to lodge complaints by 12:00 PM local time on the day following their event.
 
@@ -827,6 +869,7 @@ export function buildUserMessage({
   daysUntilEvent,
   gmailMessages,
   fraudSignature,
+  fxSignature,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
 
@@ -901,6 +944,7 @@ export function buildUserMessage({
   }
   const playbookSection = formatRequirements(matrixEntry);
   const stolenCardSection = formatFraudSignature(fraudSignature);
+  const fxDisputeSection = formatFxSignature(fxSignature);
 
   return `DISPUTE DETAILS:
 - Dispute ID: ${dispute.id}
@@ -947,7 +991,44 @@ EVIDENCE REQUIREMENTS PLAYBOOK (for this network/reason_code):
 ${playbookSection}
 
 STOLEN-CARD SIGNAL (deterministic, computed from Stripe charge data):
-${stolenCardSection}`;
+${stolenCardSection}
+
+FX-DISPUTE SIGNAL (deterministic, computed from Stripe charge data):
+${fxDisputeSection}`;
+}
+
+function formatFxSignature(sig) {
+  if (!sig) {
+    return '(Not computed — fx_dispute_signature module was not invoked for this dispute.)';
+  }
+  if (sig.reason && sig.verdict === 'NO_MATCH' && !sig.signals.processing_error_code) {
+    return `Verdict: NO_MATCH (${sig.reason}). Proceed with normal rebuttal logic — FX-dispute pattern does not apply unless the reason code is in the processing-error family (Visa 12.x / MC 4834). Note: Stripe's webhook reason_code is often missing on freshly-fired disputes; ops can populate it via the Upload VROL flow which would re-trigger this signal.`;
+  }
+  const fmt = (b) => (b === true ? 'YES' : b === false ? 'NO' : 'unknown');
+  const ratioStr = sig.ratio != null ? `${(sig.ratio * 100).toFixed(1)}%` : 'unknown';
+  const lines = [
+    `Verdict: ${sig.verdict}`,
+    `Score: ${sig.score}/3 non-prerequisite signals fired`,
+    ``,
+    `Signal 1 (prerequisite): processing_error_code — ${fmt(sig.signals.processing_error_code)} (network code: ${sig.network_reason_code || 'unknown'})`,
+    `Signal 2: foreign_card — ${fmt(sig.signals.foreign_card)} (issuer: ${sig.issuerCountry || 'unknown'}, expected: ${sig.expectedCountry || 'unknown'})`,
+    `Signal 3: partial_dispute — ${fmt(sig.signals.partial_dispute)} (dispute ${sig.disputeAmount != null ? (sig.disputeAmount / 100).toFixed(2) : '?'} of charge ${sig.chargeAmount != null ? (sig.chargeAmount / 100).toFixed(2) : '?'})`,
+    `Signal 4: fx_shaped — ${fmt(sig.signals.fx_shaped)} (ratio ${ratioStr}; FX-shaped band is 3% — 25%)`,
+  ];
+  if (sig.reason) lines.push(``, `Note: ${sig.reason}`);
+  lines.push(``);
+  if (sig.verdict === 'STRONG_MATCH') {
+    lines.push(
+      'STRONG_MATCH — recommend CUSTOMER_OUTREACH. This is the Katie Robertson pattern: processing-error code + cross-border card + partial dispute in FX-gap range. Formal Visa/MC resolution typically loses on this even with perfect evidence — the realistic win path is the cardholder phoning their issuer to withdraw. Set rebuttal_strategy: CUSTOMER_OUTREACH, recommendation: CUSTOMER_CONTACT_FIRST, draft suggested_customer_email per CUSTOMER OUTREACH RULES, keep evidence_to_include light (fallback pack only).'
+    );
+  } else if (sig.verdict === 'PARTIAL_MATCH') {
+    lines.push(
+      'PARTIAL_MATCH — likely an FX-dispute pattern but one signal is missing. Lean toward CUSTOMER_OUTREACH unless the missing signal points strongly away (e.g. foreign_card=false on a domestic charge). Weigh against the rest of the case.'
+    );
+  } else {
+    lines.push('NO_MATCH — proceed with normal rebuttal logic.');
+  }
+  return lines.join('\n');
 }
 
 function formatFraudSignature(sig) {

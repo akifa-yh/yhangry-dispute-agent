@@ -11,6 +11,7 @@ import { getComplaintDeadline } from '../utils/timezone.js';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { lookupMatrixEntry } from './evidence_matrix.js';
 import { computeFraudSignature } from './fraud_signature.js';
+import { computeFxDisputeSignature } from './fx_dispute_signature.js';
 
 function normalisePhoneForLookup(phone, postcode) {
   if (!phone) return null;
@@ -286,6 +287,25 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.error('[agent] Fraud signature computation failed (non-fatal):', err.message);
   }
 
+  // Step 5e: Compute FX-dispute signature. Detects the Katie Robertson
+  // pattern — processing-error reason code (Visa 12.x / MC 4834) +
+  // foreign-issued card + partial dispute + FX-shaped ratio (3-25% of
+  // charge). STRONG_MATCH forces CUSTOMER_OUTREACH strategy below since
+  // formal Visa/MC resolution typically loses on this pattern even with
+  // strong evidence — the win path is the cardholder phoning their issuer
+  // to withdraw. Silent NO_MATCH when Stripe's webhook reason_code is
+  // missing (often the case before VROL upload); ops can re-fire via
+  // Upload VROL to populate the code and re-trigger detection.
+  let fxSignature = null;
+  try {
+    fxSignature = await computeFxDisputeSignature(dispute);
+    console.log(
+      `[agent] FX signature: verdict=${fxSignature.verdict} score=${fxSignature.score}/3 signals=${JSON.stringify(fxSignature.signals)} ratio=${fxSignature.ratio?.toFixed(3) || 'n/a'}`
+    );
+  } catch (err) {
+    console.error('[agent] FX signature computation failed (non-fatal):', err.message);
+  }
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -306,6 +326,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     daysUntilEvent,
     gmailMessages,
     fraudSignature,
+    fxSignature,
   });
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);
@@ -338,6 +359,47 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   // can show signal details on ACCEPT posts without re-fetching the charge.
   if (fraudSignature) {
     analysis._fraud_signature = fraudSignature;
+  }
+
+  // Deterministic safety net for FX-gap disputes — parallels the stolen-card
+  // override above. STRONG_MATCH (all 4 signals fire: processing-error code +
+  // foreign card + partial dispute + FX-shaped ratio) means the case is
+  // structurally unlikely to win on the formal Visa/MC path even with good
+  // evidence; the realistic win path is the cardholder phoning their issuer
+  // to withdraw. Force CUSTOMER_OUTREACH + CUSTOMER_CONTACT_FIRST so ops
+  // doesn't burn time building an adversarial pack. Only kicks in when the
+  // LLM didn't already choose CUSTOMER_OUTREACH on its own. The stolen-card
+  // override takes precedence (ACCEPT wins over CUSTOMER_CONTACT_FIRST) so
+  // the ordering of these two blocks matters — fraud_signature block runs
+  // first above.
+  if (
+    fxSignature?.verdict === 'STRONG_MATCH' &&
+    analysis.recommendation !== 'ACCEPT' &&
+    analysis.rebuttal_strategy !== 'CUSTOMER_OUTREACH'
+  ) {
+    console.warn(
+      `[agent] Overriding LLM recommendation ${analysis.recommendation}/${analysis.rebuttal_strategy} → ` +
+        `CUSTOMER_CONTACT_FIRST/CUSTOMER_OUTREACH (FX signature STRONG_MATCH)`
+    );
+    analysis._overrode_recommendation_fx = `${analysis.recommendation}/${analysis.rebuttal_strategy}`;
+    analysis.recommendation = 'CUSTOMER_CONTACT_FIRST';
+    analysis.rebuttal_strategy = 'CUSTOMER_OUTREACH';
+    analysis.reasoning =
+      `[Deterministic override applied — FX-dispute signature STRONG_MATCH (${
+        fxSignature.network_reason_code
+      }, issuer ${fxSignature.issuerCountry}, ratio ${(fxSignature.ratio * 100).toFixed(1)}%)] ` +
+      `${analysis.reasoning || ''}`.trim();
+    analysis.flags = [
+      ...(analysis.flags || []),
+      `FX-dispute signature STRONG_MATCH — formal Visa/MC resolution typically loses on this pattern; ` +
+        `${fxSignature.network_reason_code} + ${fxSignature.issuerCountry}-issued card on ${fxSignature.expectedCountry} ` +
+        `account + partial dispute (${(fxSignature.ratio * 100).toFixed(1)}% of charge). Recommendation overridden to ` +
+        `customer outreach. If suggested_customer_email is empty, draft manually via Update Narrative.`,
+    ];
+  }
+
+  if (fxSignature) {
+    analysis._fx_signature = fxSignature;
   }
 
   // Step 7: Product gap tracking — record any tags Gemini emitted, then check
