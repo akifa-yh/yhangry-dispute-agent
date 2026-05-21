@@ -51,6 +51,52 @@ export async function postDisputeReview(analysis, dispute, booking, allContacts,
   });
 
   console.log(`[slack] Posted dispute review for ${dispute.id} (ts: ${result.ts})`);
+
+  // Persist the message coordinates to the Stripe dispute's metadata so the
+  // later charge.dispute.closed webhook can locate this exact thread to
+  // post the outcome under. In-memory state (disputeState above) doesn't
+  // survive Render idle-sleep or the weeks/months between created and
+  // closed; metadata is durable. Non-fatal — if the update fails, the
+  // outcome path falls back to Slack search.
+  try {
+    await persistSlackCoordsToStripeMetadata({
+      disputeId: dispute.id,
+      messageTs: result.ts,
+      channelId: result.channel,
+    });
+  } catch (err) {
+    console.warn(
+      `[slack] Could not persist Slack coords to Stripe metadata for ${dispute.id} (non-fatal): ${err.message}`
+    );
+  }
+}
+
+/**
+ * Write { slack_message_ts, slack_channel_id } onto a Stripe dispute's
+ * metadata. Used at dispute-created time so the dispute-closed handler
+ * weeks later can reliably find the original Slack thread to post the
+ * outcome under. Routes to the correct Stripe account.
+ *
+ * Internal helper — kept inside slack.js to keep the storage decision
+ * encapsulated. Other code paths shouldn't need to know we're using
+ * Stripe metadata as our durable map.
+ */
+async function persistSlackCoordsToStripeMetadata({ disputeId, messageTs, channelId: chanId }) {
+  // Dynamic import to avoid a circular load (slack.js ↔ stripe.js).
+  const { fetchDisputeFromEitherAccount, stripe: getStripeUk, getStripeUs } = await import(
+    './stripe.js'
+  );
+  const { account } = await fetchDisputeFromEitherAccount(disputeId);
+  const client = account === 'us' ? getStripeUs() : getStripeUk();
+  await client.disputes.update(disputeId, {
+    metadata: {
+      slack_message_ts: String(messageTs || ''),
+      slack_channel_id: String(chanId || ''),
+    },
+  });
+  console.log(
+    `[slack] Persisted Slack coords to Stripe ${account.toUpperCase()} metadata for ${disputeId} (ts=${messageTs}, channel=${chanId})`
+  );
 }
 
 /**
@@ -531,17 +577,38 @@ export async function postFollowUp(threadTs, text) {
 }
 
 /**
- * Locate the bot's original dispute-review post in #stripe-disputes by
- * searching for the dispute id. Returns the message ts so subsequent
- * outcome posts can thread under the same review. Returns null if not
- * found (e.g. very old disputes pre-this-feature, or search is rate
- * limited).
+ * Locate the bot's original dispute-review post coordinates (channel +
+ * message ts) so subsequent outcome posts can thread under the same
+ * review. Returns null if not found.
  *
- * Uses search.messages which requires `search:read`. If the scope is
- * missing OR search returns nothing, the caller should post a standalone
- * message in the channel as fallback.
+ * Resolution order:
+ *   1. Stripe dispute metadata (slack_message_ts + slack_channel_id) —
+ *      durable, written when the review was originally posted.
+ *   2. Slack search by dispute id — fallback for older disputes that
+ *      predate the metadata-persistence change.
+ *   3. null — caller decides what to do.
+ *
+ * Search requires `search:read` Slack scope. If it's missing OR search
+ * returns nothing, caller should post a clear error (NOT a top-level
+ * channel post) so ops can manually thread the outcome.
  */
 export async function findDisputeReviewMessageTs(disputeId) {
+  // Path 1: Stripe metadata (durable)
+  try {
+    const { fetchDisputeFromEitherAccount } = await import('./stripe.js');
+    const { dispute } = await fetchDisputeFromEitherAccount(disputeId);
+    const ts = dispute?.metadata?.slack_message_ts;
+    const ch = dispute?.metadata?.slack_channel_id;
+    if (ts) {
+      return { messageTs: ts, channelId: ch || channelId(), source: 'stripe-metadata' };
+    }
+  } catch (err) {
+    console.warn(
+      `[slack] Stripe metadata lookup for thread coords failed for ${disputeId}: ${err.message}`
+    );
+  }
+
+  // Path 2: Slack search fallback
   try {
     const res = await web().search.messages({
       query: `${disputeId} in:<#${channelId()}>`,
@@ -550,21 +617,21 @@ export async function findDisputeReviewMessageTs(disputeId) {
       sort_dir: 'asc',
     });
     const matches = res?.messages?.matches || [];
-    // Prefer the earliest match (the original review post). Filter to bot's
-    // posts only to avoid threading under an ops message.
     for (const m of matches) {
       if (m.username?.toLowerCase().includes('dispute agent') ||
           m.user === process.env.SLACK_BOT_USER_ID ||
           (m.text || '').includes('[DISPUTE]')) {
-        return m.ts;
+        return { messageTs: m.ts, channelId: channelId(), source: 'slack-search' };
       }
     }
-    if (matches[0]) return matches[0].ts;
-    return null;
+    if (matches[0]) {
+      return { messageTs: matches[0].ts, channelId: channelId(), source: 'slack-search' };
+    }
   } catch (err) {
-    console.warn(`[slack] findDisputeReviewMessageTs failed for ${disputeId}: ${err.message}`);
-    return null;
+    console.warn(`[slack] Slack search fallback for ${disputeId} failed: ${err.message}`);
   }
+
+  return null;
 }
 
 /**
@@ -624,15 +691,38 @@ export async function postDisputeOutcome({ outcome, booking }) {
   }
 
   const text = lines.join('\n');
-  const threadTs = await findDisputeReviewMessageTs(outcome.disputeId);
+  const coords = await findDisputeReviewMessageTs(outcome.disputeId);
+
+  if (!coords) {
+    // No original review thread found anywhere (stripe metadata + slack
+    // search both came up empty). Rather than dumping the outcome at the
+    // top of #stripe-disputes (which scatters the conversation), post an
+    // error so ops can manually thread it under the right post. Aki's
+    // 2026-05-22 ask: outcomes ALWAYS belong in the original dispute
+    // thread for reference.
+    const errorText =
+      `:warning: Dispute outcome posted but couldn't find original review thread for \`${outcome.disputeId}\`. ` +
+      `Outcome below — please manually thread under the original review:\n\n${text}`;
+    await postError(errorText, { dispute_id: outcome.disputeId });
+    console.warn(
+      `[slack] postDisputeOutcome: no thread coords found for ${outcome.disputeId} — fell back to error post`
+    );
+    return { posted: true, threadedUnder: null, fallback: 'error-post' };
+  }
 
   await web().chat.postMessage({
-    channel: channelId(),
+    channel: coords.channelId,
+    thread_ts: coords.messageTs,
+    reply_broadcast: true, // Also show in the channel — outcomes are
+                           // important enough that ops shouldn't have to
+                           // dig into old threads to see them.
     text,
-    ...(threadTs ? { thread_ts: threadTs } : {}),
   });
 
-  return { posted: true, threadedUnder: threadTs || null };
+  console.log(
+    `[slack] Posted outcome for ${outcome.disputeId} threaded under ts=${coords.messageTs} (source: ${coords.source}) with broadcast`
+  );
+  return { posted: true, threadedUnder: coords.messageTs, source: coords.source };
 }
 
 // === Product gap alerts ===
