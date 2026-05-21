@@ -283,15 +283,71 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
 
   // Pre-event banner — when the dispute was filed BEFORE the event date,
   // standard rebuttal logic doesn't apply. Make this impossible to miss:
-  // it overrides the "approve & generate evidence" instinct.
+  // it overrides the "approve & generate evidence" instinct. The banner
+  // copy varies by rebuttal_strategy: PRE_EVENT_CONTACT (event hasn't
+  // happened, intent confusion) vs CUSTOMER_OUTREACH (post-event, but
+  // the realistic win path is the cardholder phoning their bank rather
+  // than formal evidence — e.g. Visa 12.5 FX gaps, genuine-confusion
+  // unrecognized charges).
   if (analysis.recommendation === 'CUSTOMER_CONTACT_FIRST') {
+    let bannerText;
+    if (analysis.rebuttal_strategy === 'CUSTOMER_OUTREACH') {
+      bannerText =
+        ':envelope_with_arrow: *CUSTOMER OUTREACH RECOMMENDED — DO NOT SUBMIT EVIDENCE YET.* ' +
+        'This looks like a genuine-confusion / non-fraud case where the realistic win ' +
+        'path is the cardholder phoning their card issuer to withdraw — formal Visa/MC ' +
+        'resolution typically loses on this pattern even with strong evidence. ' +
+        '*Email the customer via* `info@yhangry.com` *using the draft below*, then ' +
+        'fall back to a formal counter only if no withdrawal confirmation lands by the ' +
+        'evidence deadline.';
+    } else {
+      // Default copy is the existing PRE_EVENT_CONTACT framing
+      bannerText =
+        ':rotating_light: *PRE-EVENT DISPUTE — DO NOT SUBMIT EVIDENCE YET.* The event ' +
+        'has not yet taken place; the customer has likely filed the dispute in error ' +
+        '(currency confusion, wanting a booking amendment, etc.). *Email the customer ' +
+        'first* via `info@yhangry.com` to clarify intent and request they withdraw the ' +
+        'dispute with their issuing bank. Submit a rebuttal only if they refuse and ' +
+        'the event date passes.';
+    }
     blocks.push({
       type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: ':rotating_light: *PRE-EVENT DISPUTE — DO NOT SUBMIT EVIDENCE YET.* The event has not yet taken place; the customer has likely filed the dispute in error (currency confusion, wanting a booking amendment, etc.). *Email the customer first* via `info@yhangry.com` to clarify intent and request they withdraw the dispute with their issuing bank. Submit a rebuttal only if they refuse and the event date passes.',
-      },
+      text: { type: 'mrkdwn', text: bannerText },
     });
+  }
+
+  // Suggested customer email — copy-paste block for ops. Surfaces whenever
+  // the agent has drafted one (CUSTOMER_OUTREACH and PRE_EVENT_CONTACT
+  // strategies both populate suggested_customer_email per the prompt).
+  // Renders the subject + body in a quoted section so ops can paste it
+  // straight into info@yhangry.com without picking around formatting.
+  const draftEmail = analysis.suggested_customer_email;
+  if (
+    draftEmail &&
+    typeof draftEmail === 'object' &&
+    (draftEmail.subject || draftEmail.body)
+  ) {
+    const subject = (draftEmail.subject || '').trim();
+    const body = (draftEmail.body || '').trim();
+    if (body) {
+      blocks.push({ type: 'divider' });
+      const subjectLine = subject ? `*Subject:* ${subject}\n\n` : '';
+      // Render body as a Slack mrkdwn block-quote (each line prefixed with
+      // "> ") so it's visually distinct from the surrounding analysis.
+      const quotedBody = body
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n');
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text:
+            `:writing_hand: *Suggested email to customer* — copy-paste from \`info@yhangry.com\`:\n\n` +
+            `${subjectLine}${quotedBody}`,
+        },
+      });
+    }
   }
 
   // Pre-narrative banner — visible cue that ops can paste VROL to deepen analysis.

@@ -360,6 +360,22 @@ DECIDING THE STRATEGY:
 Before you score anything, pick the strongest defensible counter-strategy
 for this case. The most common yhangry strategies are:
 
+0. CUSTOMER OUTREACH — for genuine-confusion / non-fraud cases where the
+   highest-EV move is reaching the cardholder directly (asking them to
+   phone their issuer to withdraw the dispute), NOT submitting evidence.
+   Typical fits: Visa 12.5 / Mastercard 4834 (processing error / FX gap
+   on US-issuer + UK-merchant or vice versa), credit_not_processed
+   without bad faith, "unrecognized" charges with strong platform
+   engagement (customer forgot they booked), reschedule confusions.
+   When this is the picked strategy, also draft a suggested_customer_-
+   email — see CUSTOMER OUTREACH RULES below. This strategy ALWAYS pairs
+   with recommendation: CUSTOMER_CONTACT_FIRST. Choose this OVER deadline/
+   service-rendered/customer-initiated when the underlying issue is
+   resolvable by a cardholder phone call to the issuer — formal Visa/MC
+   resolution paths often fail in these patterns even with perfect
+   evidence (Katie Robertson Visa 12.5 case 2026-05-02 is the canonical
+   example).
+
 1. DEADLINE ARGUMENT — customer did not complain within the T&C window,
    so the dispute is procedurally invalid regardless of substance.
    Evidence pillars: cancellation_policy_disclosure, Aircall/Conduit
@@ -572,6 +588,10 @@ Required behaviour for pre-event disputes (non-fraud codes):
    issuer. Submit a rebuttal only if they refuse AND the event date passes."
 8. Add a flag: "PRE-EVENT — DO NOT submit evidence yet. Event is N days
    away. Contact customer first."
+9. Set suggested_customer_email (subject + body) using the same drafting
+   rules as CUSTOMER OUTREACH — tailored to the pre-event scenario
+   (clarify intent, offer the booking change they may have wanted,
+   request withdrawal).
 
 Override rules: PRE_EVENT_CONTACT trumps DEADLINE / SERVICE_RENDERED /
 CUSTOMER_INITIATED / CLAIM_BY_CLAIM when is_pre_event=true. Always pick
@@ -584,6 +604,88 @@ appropriate counter is still proving the legitimate cardholder initiated
 the booking (CUSTOMER_INITIATED strategy). Pick STRONG_COUNTER /
 COUNTER_WITH_CAVEATS / ESCALATE as usual based on the customer's own
 platform engagement.
+
+CUSTOMER OUTREACH RULES:
+When rebuttal_strategy is CUSTOMER_OUTREACH, the agent is recommending
+the operator email the cardholder BEFORE submitting formal evidence to
+the issuer. The realistic win path here is the cardholder phoning their
+bank to withdraw — that returns funds, often before any formal evidence
+review concludes. Cases that fit:
+
+  - Visa 12.5 / Mastercard 4834 (processing error) where the underlying
+    dispute is an FX gap between charge currency and cardholder
+    statement currency — formal Visa resolution typically goes against
+    UK merchants charging US cardholders even with perfect evidence;
+    the cardholder phoning Chase/Citi to withdraw is the only realistic
+    win path.
+  - credit_not_processed where yhangry intended to refund/credit but
+    the dispute opened first and blocked it — outreach is to confirm
+    we'll process the credit once they withdraw.
+  - "unrecognized" disputes where platform engagement is strong
+    (customer initiated, exchanged messages with chef, etc.) — likely
+    they forgot they booked and only need a memory jog.
+  - Any case where the customer has previously emailed yhangry
+    constructively (we have their email in the booking + Gmail thread
+    is amicable) — outreach has high chance of success.
+
+When you pick CUSTOMER_OUTREACH:
+1. Set rebuttal_strategy: CUSTOMER_OUTREACH
+2. Set recommendation: CUSTOMER_CONTACT_FIRST
+3. Set evidence_strength based on the fallback counter we'd file if
+   outreach fails (usually MODERATE — picked from whichever secondary
+   strategy would apply).
+4. suggested_rebuttal_points should describe the CUSTOMER-CONTACT PLAN
+   in plain language, NOT adversarial rebuttal text. Examples:
+   - "Email customer at {their_email} via info@yhangry.com to confirm
+     the FX gap is the dispute trigger and ask them to phone their card
+     issuer to withdraw."
+   - "Offer to refund/credit the disputed portion once they confirm the
+     dispute is withdrawn — currently blocked by the open dispute."
+   - "Submit formal evidence as a fallback if no withdrawal confirmation
+     within N days of the evidence deadline."
+5. evidence_to_include: keep light — payment_receipt, booking
+   confirmation, customer's prior email correspondence. Avoid building
+   an adversarial-shaped pack; we don't want to escalate before
+   outreach plays out.
+6. Set suggested_customer_email to a tailored email body (see
+   "Drafting suggested_customer_email" below). REQUIRED when
+   rebuttal_strategy is CUSTOMER_OUTREACH.
+7. reasoning: open with "This is a {pattern_name} case where customer
+   outreach is the high-EV move. Formal Visa/MC resolution typically
+   {expected_outcome} on this pattern — the realistic win path is the
+   cardholder phoning their issuer to withdraw. Drafting the outreach
+   email below."
+
+Drafting suggested_customer_email:
+Produce a structured object: { subject, body }. The body should:
+  - Address the customer by first name
+  - Acknowledge the specific issue (the FX gap, the missing credit, the
+    forgotten booking — whatever the data suggests)
+  - Explain that we want to resolve this outside the formal dispute
+    process if possible
+  - Explicitly ask them to phone their card issuer and request the
+    dispute be withdrawn — give them the dispute reason code and the
+    transaction date so the bank can find it quickly
+  - If applicable, offer a goodwill option contingent on withdrawal
+    (e.g., refund the disputed portion, future credit, partial refund)
+  - Close with "reply to this email" guidance
+  - Sign off as the yhangry team
+  - Tone: warm but professional; avoid legalistic language; avoid
+    blame even when the customer caused the issue
+  - Body length: 150-250 words
+  - Subject line: short and specific, mentioning the booking date or
+    reference if memorable to the customer
+Do NOT mention internal jargon (rebuttal strategy names, network
+reason codes, etc.) — write as if a human ops person drafted it.
+
+CUSTOMER_OUTREACH vs PRE_EVENT_CONTACT — both result in
+recommendation: CUSTOMER_CONTACT_FIRST but they're distinct strategies:
+  - PRE_EVENT_CONTACT: event hasn't happened yet; mandatory whenever
+    is_pre_event=true and the dispute is not a fraud code
+  - CUSTOMER_OUTREACH: post-event genuine-confusion; chosen on merits
+    of the dispute pattern, independent of timing
+A pre-event genuine-confusion case uses PRE_EVENT_CONTACT (the more
+specific rule wins).
 
 PRODUCT GAP TAGGING:
 yhangry tracks recurring evidence gaps in product_gaps_identified[] so the
@@ -660,9 +762,9 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
     }
   ],
   "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW",
-  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | ACCEPT_STOLEN_CARD. ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code.",
+  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD. ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES.",
   "evidence_strength": "STRONG | MODERATE | WEAK | N/A. Use N/A only when recommendation is ACCEPT (no submission is being prepared).",
-  "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT.",
+  "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT OR CUSTOMER_OUTREACH.",
   "reasoning": "2-4 sentences summarising why, leading with the chosen rebuttal_strategy and the PRIMARY evidence supporting it. If narrative_provided is false, mark the recommendation as provisional.",
   "suggested_rebuttal_points": ["string"],
   "evidence_to_include": [
@@ -703,7 +805,11 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
   "flags": ["any unusual factors worth human attention"],
   "product_gaps_identified": ["zero or more of: missing_click_to_accept_timestamp | no_chef_gps_at_venue | no_chef_arrival_photo | no_signed_substitution_consent | no_post_event_review_capture | chef_payout_photo_unusable | customer_acknowledgment_not_captured. Emit only when the gap was material to THIS dispute (see PRODUCT GAP TAGGING rules above). Empty array if none apply."],
   "customer_admission_detected": "boolean. TRUE only when the GMAIL CORRESPONDENCE section contains an explicit written admission from the cardholder (per CUSTOMER ADMISSION DETECTION rules above). NEVER fabricate.",
-  "customer_admission_evidence": "string — the exact quoted admission text (1-2 sentences). Empty string when customer_admission_detected is false."
+  "customer_admission_evidence": "string — the exact quoted admission text (1-2 sentences). Empty string when customer_admission_detected is false.",
+  "suggested_customer_email": {
+    "subject": "short, specific subject line referencing the booking — empty string when not applicable",
+    "body": "drafted email body for ops to copy + paste into info@yhangry.com. REQUIRED when rebuttal_strategy is CUSTOMER_OUTREACH or PRE_EVENT_CONTACT; null otherwise. Tone: warm but professional, plain English, no internal jargon. 150-250 words. Always closes asking the cardholder to phone their card issuer to withdraw the dispute, and explains any goodwill option contingent on withdrawal."
+  }
 }`;
 
 export function buildUserMessage({
