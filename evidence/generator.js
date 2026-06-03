@@ -271,6 +271,17 @@ function pickBottomLine(analysis, dispute, booking) {
     };
   }
 
+  // Customer cancelled before the event — the event never happened, so do NOT
+  // claim service delivery (that contradicts our own cancellation exhibits).
+  // Lead instead on recognition + the contractual late-cancellation charge.
+  if (analysis.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER') {
+    return {
+      headline: 'CUSTOMER-INITIATED BOOKING, CANCELLED LATE — VALID CANCELLATION CHARGE',
+      detail: 'The cardholder personally requested, negotiated and confirmed this booking (see platform messages), then cancelled within yhangry\'s no-refund window. The amount charged is the contractual late-cancellation fee under the agreed booking terms — not payment for a delivered event. The chef had already incurred ingredient and prep costs, which the cancellation fee covers.',
+      tone: 'strong',
+    };
+  }
+
   if (analysis.chef_attendance_assessment === 'CONFIRMED' && booking.chef_submitted_payment_survey) {
     const chefName = `${booking.chef_first_name || ''} ${booking.chef_last_name || ''}`.trim() || 'The chef';
     return {

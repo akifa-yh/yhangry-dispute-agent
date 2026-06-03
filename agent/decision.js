@@ -17,6 +17,7 @@ const ATTENDANCE_EMOJI = {
   LIKELY: ':large_blue_circle:',
   UNCONFIRMED: ':question:',
   NO_SHOW: ':rotating_light:',
+  EVENT_CANCELLED_BY_CUSTOMER: ':no_entry_sign:',
 };
 
 const INDEPENDENCE_EMOJI = {

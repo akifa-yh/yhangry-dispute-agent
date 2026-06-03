@@ -199,14 +199,52 @@ satisfaction but still not definitive — customers often complain via email or
 phone instead. Cite this only as MEDIUM-independence at most, alongside
 corroborating data such as a timely or absent first complaint contact.
 
-To assess chef attendance, rely ONLY on:
-- chef_submitted_payment_survey = true — this is the STRONGEST proof of attendance.
-  The chef can only submit this form after completing the job. If this is true, the
-  chef attended and provided service. Mark attendance as CONFIRMED.
+To assess what happened with the event, FIRST check whether the customer CANCELLED
+the booking before it took place. Cancellation signals:
+- Customer platform messages calling it off ("we have to cancel", "we can't make it",
+  "we have to leave", "call off dinner", "something's come up").
+- The chef acknowledging it ("I'll let support know", "sorry it didn't work out") or a
+  chef survey/comment referencing a cancellation ("client cancelled", "I had already
+  bought/purchased ingredients").
+- An order / booking status of cancelled.
+
+If the customer cancelled before the event, the EVENT DID NOT HAPPEN. Set
+chef_attendance_assessment = EVENT_CANCELLED_BY_CUSTOMER and do NOT claim the chef
+attended or that service was delivered — that contradicts our own evidence (the
+cancellation messages) and destroys credibility at the bank. Crucially,
+chef_submitted_payment_survey = true does NOT contradict a cancellation: the survey is
+how a chef CLAIMS PAYMENT, and chefs are paid for late cancellations inside the
+no-refund window (to cover ingredients / prep already incurred) exactly as they are
+for completed events. A submitted survey proves the chef is OWED money — NOT that the
+dinner took place. Route the case per "CANCELLED-THEN-CHARGED ROUTING" below.
+
+If the customer did NOT cancel, assess chef attendance normally:
+- chef_submitted_payment_survey = true — with no cancellation, the chef completed and
+  was paid for the job; this is strong proof of attendance. Mark attendance CONFIRMED.
 - Direct messages from the chef (e.g. "I'm on my way", "running late", ETA messages)
 - Direct messages from the customer confirming arrival (e.g. "chef is here")
 - is_chef_ready_response and is_chef_on_time_response fields from chef_job
 - If NONE of these exist, chef attendance is UNCONFIRMED, not CONFIRMED
+
+CANCELLED-THEN-CHARGED ROUTING:
+When chef_attendance_assessment = EVENT_CANCELLED_BY_CUSTOMER, the winning case is NOT
+"service delivered" and rebuttal_strategy MUST NOT be SERVICE_RENDERED. The case is:
+  (1) The customer personally initiated, negotiated and confirmed the booking — which
+      defeats any "unrecognized" / unauthorized / fraud framing. For unrecognized /
+      fraud reason codes (10.4 / 4837 / 4863 / "unrecognized"), lead with
+      rebuttal_strategy = CUSTOMER_INITIATED.
+  (2) The customer cancelled within yhangry's no-refund window, so the amount charged
+      is the contractual LATE-CANCELLATION FEE under the agreed booking terms — not a
+      charge for a delivered event. Anchor this on cancellation_policy_disclosure (the
+      T&Cs).
+Use the chef's survey and any "already purchased ingredients / prep" comment as proof
+the chef INCURRED COSTS that the cancellation fee legitimately covers — never as proof
+of attendance or service delivery. Put the chef's cost / cancellation comment in
+evidence_to_include framed that way. Key evidence: the customer's own booking messages
+(initiation + a confirmation like "let's move forward"), the customer's cancellation
+message, the cancellation policy disclosure, and the chef's cost note. Layer the
+deadline argument on top ONLY if a complaint was also lodged late; otherwise the
+recognition + late-cancellation framing stands on its own.
 
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
@@ -469,8 +507,11 @@ the recommendation when a strong strategy exists.
     LATE_COMPLAINT, and we have the policy disclosure + first-contact
     timing.
   - SERVICE-RENDERED ARGUMENT works: chef attendance is CONFIRMED via
-    HIGH-independence proof (chef survey) and the dispute reason is
-    "not received" or similar.
+    HIGH-independence proof (chef survey) AND the customer did NOT cancel
+    the event, and the dispute reason is "not received" or similar. NEVER
+    use SERVICE_RENDERED when chef_attendance_assessment =
+    EVENT_CANCELLED_BY_CUSTOMER — the event did not happen; use the
+    CANCELLED-THEN-CHARGED routing instead.
   - CUSTOMER-INITIATED ARGUMENT works: the customer has clear platform
     actions (sent messages, menu negotiation) defeating a fraud
     framing.
@@ -745,7 +786,9 @@ Canonical tags (use these exact strings):
   embedded checkout screenshot is a stopgap, not per-user proof).
 - no_chef_gps_at_venue — chef_attendance_assessment is anything other than
   CONFIRMED-via-survey AND there is no GPS / location proof to settle the
-  attendance question.
+  attendance question. Do NOT emit this when chef_attendance_assessment =
+  EVENT_CANCELLED_BY_CUSTOMER — the event never happened, so chef location
+  is irrelevant.
 - no_chef_arrival_photo — customer claims the chef was late or absent and
   no chef-side day-of arrival photo exists to corroborate the chef's
   account.
@@ -803,7 +846,7 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
       "why_unaddressed": "one sentence on what data we'd need but don't have to address this claim"
     }
   ],
-  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW",
+  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER. Use EVENT_CANCELLED_BY_CUSTOMER when the customer cancelled before the event so it never happened — a submitted chef payment survey is a payment claim that also covers late-cancellation costs, NOT proof of attendance or service delivery.",
   "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD. ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES.",
   "evidence_strength": "STRONG | MODERATE | WEAK | N/A. Use N/A only when recommendation is ACCEPT (no submission is being prepared).",
   "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT OR CUSTOMER_OUTREACH.",
