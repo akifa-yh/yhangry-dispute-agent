@@ -252,6 +252,20 @@ function pickBottomLine(analysis, dispute, booking) {
     };
   }
 
+  // Customer cancelled before the event. This takes precedence over the
+  // deadline / no-complaint banners below, which read as misleading here — the
+  // customer plainly DID engage (they cancelled and emailed for a refund), so
+  // "no complaint lodged" contradicts our own exhibits. Lead instead on the
+  // conscious, legitimate booking (which kills "unrecognized") + the
+  // contractual late-cancellation charge.
+  if (analysis.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER') {
+    return {
+      headline: 'CARDHOLDER KNOWINGLY MADE THIS BOOKING, THEN CANCELLED LATE — VALID CANCELLATION CHARGE',
+      detail: 'This is a legitimate booking the cardholder consciously created — they personally requested the chef, agreed the menu and confirmed the booking on the yhangry platform, which directly refutes the "unrecognized" claim. They then cancelled within yhangry\'s no-refund window, so the amount charged is the contractual late-cancellation fee under the agreed booking terms (not payment for a delivered event); the chef had already incurred ingredient and prep costs that the fee covers.',
+      tone: 'strong',
+    };
+  }
+
   const ec = analysis.earliest_contact;
   if (analysis.deadline_status === 'LATE_COMPLAINT' && ec?.minutes_relative_to_deadline != null) {
     const mins = Math.abs(ec.minutes_relative_to_deadline);
@@ -267,17 +281,6 @@ function pickBottomLine(analysis, dispute, booking) {
     return {
       headline: 'NO COMPLAINT LODGED WITHIN T&C WINDOW',
       detail: 'No contact attempts found across Aircall, Bird, or Conduit channels within the complaint window. The cardholder bypassed the merchant\'s complaint process and filed directly with their issuing bank — a procedural failure to comply with the agreed booking terms.',
-      tone: 'strong',
-    };
-  }
-
-  // Customer cancelled before the event — the event never happened, so do NOT
-  // claim service delivery (that contradicts our own cancellation exhibits).
-  // Lead instead on recognition + the contractual late-cancellation charge.
-  if (analysis.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER') {
-    return {
-      headline: 'CUSTOMER-INITIATED BOOKING, CANCELLED LATE — VALID CANCELLATION CHARGE',
-      detail: 'The cardholder personally requested, negotiated and confirmed this booking (see platform messages), then cancelled within yhangry\'s no-refund window. The amount charged is the contractual late-cancellation fee under the agreed booking terms — not payment for a delivered event. The chef had already incurred ingredient and prep costs, which the cancellation fee covers.',
       tone: 'strong',
     };
   }
@@ -361,39 +364,22 @@ function splitExhibitDescription(text) {
 //   4. User-uploaded exhibits
 function buildAttachedExhibitList({ dispute, analysis, platformMessages, allContacts, exhibits }) {
   const items = [];
+  const isCancelled = analysis?.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER';
+  const hasUploads = (exhibits || []).some((ex) => ex?.source);
 
-  if (shouldIncludePlatformMessages(dispute, analysis) && platformMessages && platformMessages.length > 0) {
+  // 1. Auto-rendered platform-messages chat. Suppressed when ops has uploaded
+  //    their own exhibits — the uploads are the curated, higher-quality version
+  //    and the auto-render just duplicates the same conversation (Aki feedback
+  //    2026-06-04: "why exhibit A when the same is shown via screenshots in B?").
+  if (shouldIncludePlatformMessages(dispute, analysis) && !hasUploads && platformMessages && platformMessages.length > 0) {
     items.push({
       kind: 'platform_messages',
       document: 'Platform messages',
-      proves: `${platformMessages.length} chef↔customer messages on the yhangry platform around the booking.`,
+      proves: `${platformMessages.length} messages between the chef and customer on the yhangry platform around the booking.`,
     });
   }
 
-  if (shouldEmbedCheckoutScreenshot(dispute)) {
-    items.push({
-      kind: 'checkout',
-      document: 'yhangry checkout screenshot',
-      proves: 'Booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance is required before payment.',
-    });
-  }
-
-  if (shouldEmbedCancellationTermsScreenshot(dispute)) {
-    items.push({
-      kind: 'cancellation_terms',
-      document: 'yhangry booking terms — cancellation policy',
-      proves: 'Cancellation/refund clauses the customer agreed to at checkout (yhangry.com/booking-terms): 100% cancellation fee within 7 days of booking time, no refund after Grace Period.',
-    });
-  }
-
-  if (allContacts && allContacts.length > 0) {
-    items.push({
-      kind: 'contact_log',
-      document: 'Inbound contact log',
-      proves: `${allContacts.length} inbound contact attempts across Aircall, Bird, and Conduit channels from event date onwards.`,
-    });
-  }
-
+  // 2. Ops-curated uploaded exhibits — the primary evidence, lettered first.
   (exhibits || []).forEach((ex) => {
     if (!ex?.source) return;
     const { document, proves } = splitExhibitDescription(ex.description || '');
@@ -404,6 +390,35 @@ function buildAttachedExhibitList({ dispute, analysis, platformMessages, allCont
       source: ex.source,
     });
   });
+
+  // 3. Inbound contact log (when present).
+  if (allContacts && allContacts.length > 0) {
+    items.push({
+      kind: 'contact_log',
+      document: 'Inbound contact log',
+      proves: `${allContacts.length} inbound contact attempts across Aircall, Bird, and Conduit channels from event date onwards.`,
+    });
+  }
+
+  // 4. Policy screenshots as supporting exhibits (last). Always included for
+  //    cancelled-then-charged disputes (isCancelled): the checkout screenshot
+  //    proves the customer agreed to the booking terms, and the cancellation-
+  //    terms screenshot proves the no-refund policy they are bound by.
+  if (shouldEmbedCheckoutScreenshot(dispute) || isCancelled) {
+    items.push({
+      kind: 'checkout',
+      document: 'yhangry checkout screenshot',
+      proves: 'Booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance is required before payment.',
+    });
+  }
+
+  if (shouldEmbedCancellationTermsScreenshot(dispute) || isCancelled) {
+    items.push({
+      kind: 'cancellation_terms',
+      document: 'yhangry booking terms — cancellation policy',
+      proves: 'Cancellation/refund clauses the customer agreed to at checkout (yhangry.com/booking-terms): 100% cancellation fee within 7 days of booking time, no refund after Grace Period.',
+    });
+  }
 
   items.forEach((it, i) => {
     it.letter = String.fromCharCode(65 + i); // A, B, C, ...
@@ -803,7 +818,12 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // callout already gives the punchline and rebuttal bullets carry the
   // narrative. Added 2026-05-20 after the Khushbu Aggarwal PDF showed a
   // deadline-focused timeline on an admission-driven case.
-  if (!analysis.customer_admission_detected) {
+  // Skip the deadline-anchored timeline for admission cases (deadline is moot)
+  // and for cancellation cases (its "first complaint contact / T&C deadline"
+  // framing is misleading when the dispute is about a late cancellation, not a
+  // post-event complaint — and it omits the actual cancellation event).
+  if (!analysis.customer_admission_detected &&
+      analysis.chef_attendance_assessment !== 'EVENT_CANCELLED_BY_CUSTOMER') {
     drawCompactTimeline(doc, analysis, dispute, booking);
   }
 
