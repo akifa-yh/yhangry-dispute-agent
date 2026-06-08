@@ -6,7 +6,7 @@ import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
 import * as slack from '../integrations/slack.js';
-import { fetchCustomerCorrespondence } from '../integrations/gmail.js';
+import { fetchCustomerCorrespondence, fetchChefCorrespondence } from '../integrations/gmail.js';
 import { getComplaintDeadline } from '../utils/timezone.js';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { lookupMatrixEntry } from './evidence_matrix.js';
@@ -242,6 +242,16 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.warn('[agent] Gmail fetch failed (non-fatal):', err.message);
   }
 
+  // Step 5a': Pull recent chefs@ correspondence with the chef on this booking —
+  // the merchant side of the story (chef's account of the day + any proof they
+  // emailed in). Ships dark until GMAIL_CHEFS_REFRESH_TOKEN is set; non-fatal.
+  let chefMessages = [];
+  try {
+    chefMessages = await fetchChefCorrespondence(booking.chef_email, { daysBack: 90, maxMessages: 30 });
+  } catch (err) {
+    console.warn('[agent] Chef Gmail fetch failed (non-fatal):', err.message);
+  }
+
   // Step 5b: Look up the evidence requirements playbook for this dispute's
   // (network, reason_code) pair. The matrix tells us which evidence types
   // win at the bank for this code so the agent can do a "what we have vs
@@ -334,6 +344,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     isPreEvent,
     daysUntilEvent,
     gmailMessages,
+    chefMessages,
     fraudSignature,
     fxSignature,
   });

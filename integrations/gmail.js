@@ -1,50 +1,53 @@
 /**
- * Gmail integration for the dispute agent (Tyler retro #11).
+ * Gmail integration for the dispute agent (Tyler retro #11; chefs@ added 2026-06).
  *
- * Pulls recent correspondence between yhangry's info@ inbox and a customer's
- * email address, so Gemini can spot patterns like:
- *   - Customer admissions ("I'll cancel the dispute", "filed in error",
- *     "my apologies") — strongest possible counter-evidence
- *   - Direct customer complaints that bypass yhangry's complaint channels
- *   - Currency/pricing confusion (12.x dispute pattern)
+ * Pulls recent correspondence from TWO yhangry inboxes so Gemini can reconstruct
+ * what happened from both sides:
+ *   - info@yhangry.com  ↔ the CUSTOMER  (admissions, complaints, currency confusion)
+ *   - chefs@yhangry.com ↔ the CHEF      (the chef's account of the day + any proof
+ *                                        they sent: photos, timestamps, drive-time)
  *
- * Gated on GMAIL_ENABLED env var — when false, the fetch returns an empty
- * list silently and the rest of the analysis runs as before. This lets us
- * ship the integration code "dark" before the OAuth setup is complete.
+ * Each inbox is a SEPARATE Google mailbox, so each needs its own OAuth refresh
+ * token (the same Google Cloud OAuth client can issue both — just authorise each
+ * mailbox once via the OAuth Playground):
+ *   - GMAIL_CLIENT_ID            (shared OAuth client)
+ *   - GMAIL_CLIENT_SECRET        (shared OAuth client)
+ *   - GMAIL_REFRESH_TOKEN        (authorised as info@yhangry.com)
+ *   - GMAIL_CHEFS_REFRESH_TOKEN  (authorised as chefs@yhangry.com)
  *
- * Authentication: OAuth2 with a long-lived refresh token. Setup via Google
- * OAuth Playground (see #11 phase B in dispute_agent_state.md):
- *   - GMAIL_CLIENT_ID         (from Google Cloud OAuth client)
- *   - GMAIL_CLIENT_SECRET     (from Google Cloud OAuth client)
- *   - GMAIL_REFRESH_TOKEN     (from OAuth Playground, authorised as info@yhangry.com)
+ * Gated on GMAIL_ENABLED. The chef fetch additionally ships "dark" until
+ * GMAIL_CHEFS_REFRESH_TOKEN is set — fetchChefCorrespondence returns [] until then,
+ * so the agent keeps working with just the customer inbox in the meantime.
  *
- * Lazy init pattern (per memory's "ES module hoisting + lazy init" gotcha):
- * the OAuth2 client and Gmail API client are constructed on first use, not
- * at module load, so env vars from dotenv are guaranteed to be available.
+ * Lazy init (per memory's "ES module hoisting + lazy init" gotcha): clients are
+ * constructed on first use so dotenv env vars are available.
  */
 
 import { google } from 'googleapis';
 
-let _gmailClient = null;
-
-function gmailClient() {
-  if (_gmailClient) return _gmailClient;
-
+function buildGmailClient(refreshToken) {
   const clientId = process.env.GMAIL_CLIENT_ID;
   const clientSecret = process.env.GMAIL_CLIENT_SECRET;
-  const refreshToken = process.env.GMAIL_REFRESH_TOKEN;
-
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error(
-      'Gmail OAuth credentials missing — set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN'
+      'Gmail OAuth credentials missing — need GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and a refresh token'
     );
   }
-
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret);
   oauth2.setCredentials({ refresh_token: refreshToken });
+  return google.gmail({ version: 'v1', auth: oauth2 });
+}
 
-  _gmailClient = google.gmail({ version: 'v1', auth: oauth2 });
+let _gmailClient = null;
+function gmailClient() {
+  if (!_gmailClient) _gmailClient = buildGmailClient(process.env.GMAIL_REFRESH_TOKEN);
   return _gmailClient;
+}
+
+let _chefsGmailClient = null;
+function chefsGmailClient() {
+  if (!_chefsGmailClient) _chefsGmailClient = buildGmailClient(process.env.GMAIL_CHEFS_REFRESH_TOKEN);
+  return _chefsGmailClient;
 }
 
 function gmailEnabled() {
@@ -106,75 +109,53 @@ function headerValue(headers, name) {
 }
 
 /**
- * Fetch recent correspondence between info@yhangry.com and a customer.
+ * Shared fetch: pull recent correspondence between the authorised mailbox and a
+ * peer email address. Returns plain-text message objects sorted oldest → newest.
+ * Non-fatal throughout — any error degrades to [].
  *
- * Returns an array of plain-text message objects, sorted oldest → newest:
- *   { id, threadId, date, from, to, subject, snippet, body }
- *
- * Empty array when:
- *   - GMAIL_ENABLED is not 'true' (feature flag off)
- *   - customerEmail is missing/empty
- *   - Gmail API returns no matches
- *
- * @param {string} customerEmail - customer's email address (from booking)
- * @param {object} [options]
- * @param {number} [options.daysBack=90] - lookback window
- * @param {number} [options.maxMessages=10] - cap on messages returned (most
- *   recent kept if more match)
+ * @param {Function} clientGetter - returns the gmail client for the target inbox
+ * @param {string} peerEmail - the other party's email (customer or chef)
+ * @param {string} label - 'customer' | 'chef', for logging
+ * @param {object} [options] - { daysBack=90, maxMessages=30 }
  */
-export async function fetchCustomerCorrespondence(customerEmail, options = {}) {
-  if (!gmailEnabled()) {
-    return [];
-  }
-  if (!customerEmail) {
-    return [];
-  }
+async function fetchCorrespondence(clientGetter, peerEmail, label, options = {}) {
+  if (!peerEmail) return [];
 
-  const { daysBack = 90, maxMessages = 10 } = options;
-  const sanitizedEmail = customerEmail.replace(/["'\\]/g, '');
+  const { daysBack = 90, maxMessages = 30 } = options;
+  const sanitizedEmail = peerEmail.replace(/["'\\]/g, '');
   const sinceDays = Math.max(1, Math.floor(daysBack));
-
-  // Gmail query syntax: -from:foo means exclude. Here we want messages
-  // where the customer is either sender or recipient.
   const query = `(from:${sanitizedEmail} OR to:${sanitizedEmail}) newer_than:${sinceDays}d`;
 
   let gmail;
   try {
-    gmail = gmailClient();
+    gmail = clientGetter();
   } catch (err) {
-    console.warn(`[gmail] Client init failed (Gmail integration disabled): ${err.message}`);
+    console.warn(`[gmail] ${label} client init failed (skipping): ${err.message}`);
     return [];
   }
 
   let listRes;
   try {
-    listRes = await gmail.users.messages.list({
-      userId: 'me',
-      q: query,
-      maxResults: maxMessages,
-    });
+    listRes = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: maxMessages });
   } catch (err) {
-    console.warn(`[gmail] List failed for ${customerEmail}: ${err.message}`);
+    console.warn(`[gmail] ${label} list failed for ${peerEmail}: ${err.message}`);
     return [];
   }
 
   const messages = listRes.data.messages || [];
   if (messages.length === 0) {
-    console.log(`[gmail] No messages found for ${customerEmail} (window: ${sinceDays}d)`);
+    console.log(`[gmail] No ${label} messages for ${peerEmail} (window: ${sinceDays}d)`);
     return [];
   }
 
-  // Fetch full message bodies (in parallel)
   const results = await Promise.allSettled(
-    messages.map((m) =>
-      gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' })
-    )
+    messages.map((m) => gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' }))
   );
 
   const decoded = [];
   for (const r of results) {
     if (r.status !== 'fulfilled') {
-      console.warn(`[gmail] Message fetch failed: ${r.reason?.message}`);
+      console.warn(`[gmail] ${label} message fetch failed: ${r.reason?.message}`);
       continue;
     }
     const msg = r.value.data;
@@ -192,13 +173,34 @@ export async function fetchCustomerCorrespondence(customerEmail, options = {}) {
     });
   }
 
-  // Sort oldest → newest for chronological context
   decoded.sort((a, b) => {
     const da = a.date ? new Date(a.date).getTime() : 0;
     const db = b.date ? new Date(b.date).getTime() : 0;
     return da - db;
   });
 
-  console.log(`[gmail] Fetched ${decoded.length} message(s) for ${customerEmail} (window: ${sinceDays}d)`);
+  console.log(`[gmail] Fetched ${decoded.length} ${label} message(s) for ${peerEmail} (window: ${sinceDays}d)`);
   return decoded;
+}
+
+/**
+ * Fetch recent correspondence between info@yhangry.com and the CUSTOMER.
+ * Returns [] when GMAIL_ENABLED is off, the email is missing, or no matches.
+ */
+export async function fetchCustomerCorrespondence(customerEmail, options = {}) {
+  if (!gmailEnabled()) return [];
+  return fetchCorrespondence(gmailClient, customerEmail, 'customer', options);
+}
+
+/**
+ * Fetch recent correspondence between chefs@yhangry.com and the CHEF.
+ * Ships dark: returns [] until GMAIL_CHEFS_REFRESH_TOKEN is set (chefs@ authorised),
+ * so the agent runs on the customer inbox alone in the meantime.
+ */
+export async function fetchChefCorrespondence(chefEmail, options = {}) {
+  if (!gmailEnabled()) return [];
+  if (!process.env.GMAIL_CHEFS_REFRESH_TOKEN) {
+    return []; // chefs@ not authorised yet — feature inert
+  }
+  return fetchCorrespondence(chefsGmailClient, chefEmail, 'chef', options);
 }

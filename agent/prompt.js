@@ -596,6 +596,26 @@ Distinguish "stolen-card fraud — counter is unwinnable" (ACCEPT) from
 "no winning strategy" (ESCALATE) from "strategy exists but has gaps"
 (COUNTER_WITH_CAVEATS) from "clear winning strategy" (STRONG_COUNTER).
 
+CHEF CORRESPONDENCE (from chefs@yhangry.com):
+The user message may include a CHEF CORRESPONDENCE section — recent emails between
+yhangry's chefs@ inbox and the chef on this booking. This is the MERCHANT side of the
+story: the chef's account of the day (arrival, access, why the event did or didn't
+proceed) and any proof they emailed in (timestamped ingredient photos, Google-Maps
+drive-time, etc.).
+Use it to:
+- Reconstruct what actually happened — especially for product_not_received / no-show /
+  access disputes (does the chef's account explain the non-delivery?).
+- Identify chef-provided EXHIBITS to surface in evidence_to_include (note them as
+  "ops to upload" — email attachments are NOT auto-embedded into the PDF).
+INDEPENDENCE: the chef has a direct stake in the outcome, so the chef's own statements
+are LOW independence — corroborating context, never the sole basis. Lead with the
+CUSTOMER's own words and hard platform / Stripe data. NEVER treat a chef statement as a
+customer_admission (admissions come only from the cardholder's own emails).
+OWN-GOALS: if the chef's emails CORROBORATE the customer's complaint (e.g. the chef
+concedes leaving early, substitutions, arriving late, or a chef-side access error),
+that is NEGATIVE evidence — put it in evidence_weaknesses, never evidence_to_include
+(Tyler rule).
+
 CUSTOMER ADMISSION DETECTION (from Gmail correspondence):
 The user message may include a GMAIL CORRESPONDENCE section with recent
 emails between info@yhangry.com and the cardholder's email address. When
@@ -962,6 +982,7 @@ export function buildUserMessage({
   isPreEvent,
   daysUntilEvent,
   gmailMessages,
+  chefMessages,
   fraudSignature,
   fxSignature,
 }) {
@@ -1081,6 +1102,9 @@ ${narrativeSection}
 GMAIL CORRESPONDENCE (info@yhangry.com ↔ ${booking.customer_email || 'customer'}, last 90 days):
 ${formatGmailMessages(gmailMessages)}
 
+CHEF CORRESPONDENCE (chefs@yhangry.com ↔ ${[booking.chef_first_name, booking.chef_last_name].filter(Boolean).join(' ') || 'chef'}${booking.chef_email ? ` <${booking.chef_email}>` : ''}, last 90 days):
+${formatGmailMessages(chefMessages)}
+
 EVIDENCE REQUIREMENTS PLAYBOOK (for this network/reason_code):
 ${playbookSection}
 
@@ -1160,7 +1184,7 @@ function formatFraudSignature(sig) {
 
 function formatGmailMessages(messages) {
   if (!messages || messages.length === 0) {
-    return '(No Gmail correspondence in window — either Gmail integration is not enabled, or no emails were exchanged with this customer in the last 90 days.)';
+    return '(No correspondence in window — either the Gmail integration is not enabled for this inbox, or no emails were exchanged in the last 90 days.)';
   }
   return messages
     .map((m, i) => {
