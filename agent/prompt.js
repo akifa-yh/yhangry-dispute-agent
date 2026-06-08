@@ -281,13 +281,23 @@ INDEPENDENCE: the chef's own "nobody answered" account is LOW independence. Lead
 the CUSTOMER'S OWN messages admitting absence (HIGH independence). If the only proof
 of attendance is the chef's word + survey, still set CUSTOMER_NO_SHOW but record the
 corroboration gap (no GPS / arrival photo) in evidence_weaknesses.
-ACCESS CODES — ADDRESS HEAD-ON: if the customer provided access codes, do NOT ignore
-it (the cardholder will argue "I gave you the code, you no-showed"). Distinguish a
-GATE-only code (chef still needed someone to open the house door → the customer's
-absence is the cause) from a HOUSE/door code (if provided and unused, that is a
-genuine weakness — surface it in evidence_weaknesses, don't bury it). The
-no-timely-complaint (deadline) argument is a valid SECONDARY here, since a real event
-was expected and the customer raised no timely complaint.
+ACCESS CODES: a chef does not let themselves into a private home to prep — they need
+the customer to admit them and be present to host. Treat any access code the customer
+sent as GATE / building access only, UNLESS the platform/email messages show the
+customer EXPLICITLY told the chef to let themselves in and start prepping in the
+customer's absence. Absent such an instruction, the chef reasonably waited to be
+admitted, and the customer's failure to appear is the cause of non-delivery. Frame it
+that way: the chef attended, waited to be let in, the customer never showed; the next
+day the chef followed up offering to reschedule and the customer was unresponsive.
+Do NOT volunteer a chef's momentary inability to load the app / website as a "platform
+technical failure" or merchant fault — a transient connectivity glitch at a remote
+venue (especially when the code arrives last-minute with the chef already en route) is
+not a yhangry platform failure and is immaterial when entry depended on the customer
+being present. Only treat access as a genuine weakness if there is concrete evidence
+the chef was given HOUSE/door access AND failed to use it.
+The no-timely-complaint (deadline) point is at most a SECONDARY supporting argument
+here — NEVER the lead and NEVER the rebuttal_strategy. Lead with the chef-attended /
+customer-absent substance above.
 
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
@@ -384,11 +394,14 @@ When narrative_provided is false:
 - If deadline_status is LATE_COMPLAINT or NO_COMPLAINT_FOUND, the
   deadline argument is decisive regardless of substance — go
   STRONG_COUNTER if we have policy disclosure + first-contact timing
-  (we usually do). EXCEPTION: if chef_attendance_assessment =
-  EVENT_CANCELLED_BY_CUSTOMER, do NOT invoke the deadline / "no complaint
-  lodged" argument (the customer cancelled and engaged — see
-  CANCELLED-THEN-CHARGED ROUTING). Still go STRONG_COUNTER, but on
-  recognition + the late-cancellation fee.
+  (we usually do). EXCEPTIONS — do NOT let the deadline hijack the lead:
+  • EVENT_CANCELLED_BY_CUSTOMER → do NOT invoke the deadline / "no complaint
+    lodged" argument at all (the customer cancelled and engaged — see
+    CANCELLED-THEN-CHARGED ROUTING). Lead on recognition + the late-cancellation fee.
+  • CUSTOMER_NO_SHOW → the deadline may be a valid SECONDARY point, but it is
+    NEVER the lead and rebuttal_strategy MUST be CUSTOMER_NO_SHOW (not DEADLINE).
+    Lead on "chef attended, the cardholder was absent" (see CUSTOMER-NO-SHOW ROUTING).
+  Still go STRONG_COUNTER in both.
 - If deadline_status is TIMELY_COMPLAINT, you don't yet know what the
   customer alleged, so you can't pick the strongest claim-mapping
   strategy. Cap at COUNTER_WITH_CAVEATS unless a SERVICE-RENDERED
@@ -508,10 +521,11 @@ for this case. The most common yhangry strategies are:
    Evidence pillars: cancellation_policy_disclosure, Aircall/Conduit
    timing showing first contact relative to deadline, checkout
    screenshot anchoring the policy. Strongest when deadline_status is
-   LATE_COMPLAINT or NO_COMPLAINT_FOUND. NOT applicable to
-   EVENT_CANCELLED_BY_CUSTOMER cases — a cancellation is not a service
-   complaint, and the cardholder engaged, so this argument is false and
-   self-contradicting there (use CANCELLED-THEN-CHARGED ROUTING instead).
+   LATE_COMPLAINT or NO_COMPLAINT_FOUND. NOT the lead for
+   EVENT_CANCELLED_BY_CUSTOMER (false / self-contradicting — the cardholder
+   engaged; use CANCELLED-THEN-CHARGED ROUTING) nor for CUSTOMER_NO_SHOW (lead
+   with the chef-attended / customer-absent substance — the deadline is at most
+   a secondary point there; use CUSTOMER-NO-SHOW ROUTING).
 
 2. SERVICE-RENDERED ARGUMENT — chef attended and completed the service,
    so any "not received" framing fails. Evidence pillars:
