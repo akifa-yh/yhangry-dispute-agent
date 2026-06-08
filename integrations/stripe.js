@@ -35,6 +35,44 @@ export async function fetchChargeFromEitherAccount(chargeId) {
   }
 }
 
+// Payment-authentication summary from a charge — feeds the auto "payment
+// authentication" exhibit (commit 2026-06-06). When the card's CVC/AVS checks
+// passed, that's the strongest single rebuttal to an "unrecognized" /
+// "unauthorised" claim: the security code + billing postcode were entered
+// correctly and verified by the issuer, i.e. a deliberate, authenticated
+// payment. Pure function — given a Stripe charge, returns the fields or null.
+export function extractPaymentAuth(charge) {
+  const card = charge?.payment_method_details?.card;
+  if (!card) return null;
+  const checks = card.checks || {};
+  const bd = charge.billing_details || {};
+  return {
+    brand: card.brand || null,                 // 'amex', 'visa', ...
+    last4: card.last4 || null,
+    country: card.country || null,             // issuer country, e.g. 'US'
+    funding: card.funding || null,             // 'credit' | 'debit' | ...
+    cvcCheck: checks.cvc_check || null,                       // 'pass' | 'fail' | 'unavailable' | 'unchecked'
+    postalCheck: checks.address_postal_code_check || null,
+    line1Check: checks.address_line1_check || null,
+    ownerName: bd.name || null,
+    ownerEmail: bd.email || null,
+  };
+}
+
+// Fetch the dispute's charge and return its payment-authentication summary.
+// Non-fatal: returns null on any error or missing charge.
+export async function getPaymentAuthForDispute(dispute) {
+  try {
+    const chargeId = typeof dispute?.charge === 'string' ? dispute.charge : dispute?.charge?.id;
+    if (!chargeId) return null;
+    const { charge } = await fetchChargeFromEitherAccount(chargeId);
+    return extractPaymentAuth(charge);
+  } catch (err) {
+    console.warn(`[stripe] getPaymentAuthForDispute failed: ${err.message}`);
+    return null;
+  }
+}
+
 // Fetch a dispute from whichever account owns it. Same dual-account pattern
 // as fetchChargeFromEitherAccount. Used by analyseDispute to rehydrate
 // dispute objects that arrive from button/modal payloads stripped down to

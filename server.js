@@ -4,7 +4,7 @@ import express from 'express';
 import pkg from '@slack/bolt';
 const { App, ExpressReceiver } = pkg;
 import { stripe as getStripe } from './integrations/stripe.js';
-import { submitEvidence } from './integrations/stripe.js';
+import { submitEvidence, getPaymentAuthForDispute } from './integrations/stripe.js';
 import { investigateDispute, analyseDispute } from './agent/index.js';
 import {
   analyseExhibits,
@@ -152,12 +152,14 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     }
 
     if (!docxBuffer) {
+      const paymentAuth = await getPaymentAuthForDispute(dispute);
       docxBuffer = await generateEvidence({
         analysis: state.analysis,
         dispute,
         booking: state.booking,
         platformMessages: state.messages || [],
         allContacts: state.all_contacts || [],
+        paymentAuth,
       });
       pdfSource = 'generated-from-analysis (no prior Upload Evidence PDF in thread)';
       console.log(
@@ -566,6 +568,7 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
       platformMessages: result.messages,
       allContacts: result.allContacts,
       exhibits,
+      paymentAuth: result.paymentAuth,
     });
 
     await uploadEvidencePdf({

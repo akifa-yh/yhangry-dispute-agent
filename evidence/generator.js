@@ -329,6 +329,25 @@ function shouldIncludePlatformMessages(dispute, analysis) {
   return true;
 }
 
+// Auto "payment authentication" exhibit gating. Include it only when it HELPS
+// (CVC actually passed) AND the dispute turns on recognition/authorisation —
+// an unrecognized/fraud reason, a fraud network code, a customer-initiated
+// rebuttal, or a customer-cancelled booking (often filed as "unrecognized").
+// Never on ACCEPT (no submission is built) or when CVC did not pass.
+const PAYMENT_AUTH_FRAUD_CODES = new Set(['10.4', '4837', '4863']);
+function shouldIncludePaymentAuth(dispute, analysis, paymentAuth) {
+  if (!paymentAuth || paymentAuth.cvcCheck !== 'pass') return false;
+  if (analysis?.recommendation === 'ACCEPT') return false;
+  const reason = String(dispute?.reason || '').toLowerCase();
+  const code = String(dispute?.network_reason_code || '').trim();
+  return (
+    reason === 'unrecognized' || reason === 'fraudulent' ||
+    PAYMENT_AUTH_FRAUD_CODES.has(code) ||
+    analysis?.rebuttal_strategy === 'CUSTOMER_INITIATED' ||
+    analysis?.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER'
+  );
+}
+
 // Split a free-text exhibit description into a document name and a
 // "what it proves" clause. Accepts multiple separator styles so ops can
 // use whatever's easiest to type:
@@ -352,6 +371,48 @@ function splitExhibitDescription(text) {
   return { document: s, proves: '' };
 }
 
+// Auto-generated "payment authentication" exhibit — a clean panel built from the
+// Stripe charge's CVC/AVS check results (no screenshot needed). When the checks
+// passed, this is the strongest single rebuttal to an "unrecognized" claim.
+const PAYMENT_AUTH_CARD_BRANDS = { amex: 'American Express', visa: 'Visa', mastercard: 'Mastercard', discover: 'Discover', diners: 'Diners Club', jcb: 'JCB', unionpay: 'UnionPay' };
+function fmtAuthCheck(v) {
+  if (v === 'pass') return 'Passed';
+  if (v === 'fail') return 'Failed';
+  return 'Not provided';
+}
+function drawPaymentAuthPage(doc, letter, pa) {
+  doc.addPage();
+  exhibitHeading(doc,
+    letter ? `Exhibit ${letter}` : 'Payment Authentication',
+    'Card-verification results recorded by Stripe at the time of payment.'
+  );
+  const brand = PAYMENT_AUTH_CARD_BRANDS[pa.brand] || (pa.brand ? String(pa.brand).toUpperCase() : 'Card');
+  const rows = [['Card', `${brand}${pa.last4 ? ` •••• ${pa.last4}` : ''}`]];
+  rows.push(['CVC (security code) check', fmtAuthCheck(pa.cvcCheck)]);
+  rows.push(['Billing postcode (AVS) check', fmtAuthCheck(pa.postalCheck)]);
+  if (pa.line1Check === 'pass' || pa.line1Check === 'fail') rows.push(['Billing address check', fmtAuthCheck(pa.line1Check)]);
+  if (pa.ownerName) rows.push(['Cardholder', pa.ownerName]);
+  if (pa.ownerEmail) rows.push(['Cardholder email', pa.ownerEmail]);
+  if (pa.country) rows.push(['Issuer country', pa.country]);
+
+  const x = 50, w = 495, rowH = 26, labelW = 220;
+  let y = doc.y + 4;
+  for (const [label, value] of rows) {
+    doc.rect(x, y, w, rowH).fill(GREY_BG);
+    doc.lineWidth(0.5).strokeColor(GREY_BORDER).rect(x, y, w, rowH).stroke();
+    doc.fillColor(GREY_TEXT).fontSize(9).font('Helvetica').text(label, x + 10, y + 8, { width: labelW - 14 });
+    const passed = /check$/.test(label) && value === 'Passed';
+    doc.fillColor(passed ? GREEN_DARK : NAVY).fontSize(9).font('Helvetica-Bold').text(value, x + labelW, y + 8, { width: w - labelW - 10 });
+    y += rowH;
+  }
+  doc.fillColor('#000000').strokeColor('#000000').lineWidth(1);
+  doc.y = y + 14;
+  doc.fontSize(9).font('Helvetica').fillColor('#000000').text(
+    "The card's security code (CVC) and billing postcode were entered correctly and verified by the issuer at the time of payment — confirming a deliberate, authenticated transaction by the cardholder, and directly rebutting any claim that the charge was unrecognised or unauthorised.",
+    x, doc.y, { width: w, align: 'left' }
+  );
+}
+
 // Build the unified list of exhibits that will appear in this PDF, in
 // render order. Each item is given a sequential letter (A, B, C, ...) and
 // the same letter is used both in the page-1 Evidence table and on the
@@ -362,7 +423,7 @@ function splitExhibitDescription(text) {
 //   2. Click-to-accept screenshot (when applicable)
 //   3. Inbound contact log (when present)
 //   4. User-uploaded exhibits
-function buildAttachedExhibitList({ dispute, analysis, platformMessages, allContacts, exhibits }) {
+function buildAttachedExhibitList({ dispute, analysis, platformMessages, allContacts, exhibits, paymentAuth }) {
   const items = [];
   const isCancelled = analysis?.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER';
   const hasUploads = (exhibits || []).some((ex) => ex?.source);
@@ -390,6 +451,16 @@ function buildAttachedExhibitList({ dispute, analysis, platformMessages, allCont
       source: ex.source,
     });
   });
+
+  // 2b. Auto payment-authentication panel (CVC/AVS passed) — strong recognition
+  //     proof for unrecognized / fraud / customer-initiated cases. No upload needed.
+  if (shouldIncludePaymentAuth(dispute, analysis, paymentAuth)) {
+    items.push({
+      kind: 'payment_auth',
+      document: 'Stripe payment authentication',
+      proves: "The card's CVC (security code) and billing-postcode checks passed at payment — a deliberate, authenticated transaction by the cardholder, not an unrecognised charge.",
+    });
+  }
 
   // 3. Inbound contact log (when present).
   if (allContacts && allContacts.length > 0) {
@@ -784,7 +855,35 @@ function drawCallLogTable(doc, contacts) {
  *   in sub-commit 3; safely empty/missing when called from the standard
  *   "Approve & Generate Evidence" button.
  */
-export async function generateEvidence({ analysis, dispute, booking, platformMessages, allContacts, exhibits }) {
+// Safety-compress ops-uploaded exhibit images before embedding. pdfkit's
+// doc.image() embeds the FULL image bytes (the `fit:` option only scales the
+// display box), so a few large screenshots can push the PDF over Stripe's 5MB
+// evidence limit. Downscale to <=1800px long edge + JPEG q82. Uses sharp via a
+// dynamic import wrapped in try/catch so a missing/broken native build on the
+// host degrades gracefully to the original image rather than crashing the PDF.
+async function compressExhibitImages(exhibits) {
+  if (!exhibits || exhibits.length === 0) return exhibits;
+  let sharp;
+  try { sharp = (await import('sharp')).default; }
+  catch (err) { console.warn('[evidence] sharp unavailable, skipping image compression:', err.message); return exhibits; }
+  const out = [];
+  for (const ex of exhibits) {
+    if (!ex?.source) { out.push(ex); continue; }
+    try {
+      const buf = await sharp(ex.source).rotate()
+        .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 82 }).toBuffer();
+      out.push({ ...ex, source: buf });
+    } catch (err) {
+      console.warn('[evidence] image compress failed for one exhibit, using original:', err.message);
+      out.push(ex);
+    }
+  }
+  return out;
+}
+
+export async function generateEvidence({ analysis, dispute, booking, platformMessages, allContacts, exhibits, paymentAuth }) {
+  exhibits = await compressExhibitImages(exhibits);
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const bufferPromise = collectBuffer(doc);
 
@@ -842,7 +941,7 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // assigned here are reused on each exhibit's page header so the page-1
   // Evidence table corresponds exactly to what the reviewer sees later.
   const attachedExhibits = buildAttachedExhibitList({
-    dispute, analysis, platformMessages, allContacts, exhibits,
+    dispute, analysis, platformMessages, allContacts, exhibits, paymentAuth,
   });
 
   // Page-1 Evidence table — lists actual attached exhibits with letters
@@ -876,6 +975,8 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
     } else if (item.kind === 'user_upload') {
       const subtitle = item.proves ? `${item.document} — ${item.proves}` : item.document;
       drawImageExhibitPage(doc, { label: item.letter, description: subtitle, source: item.source });
+    } else if (item.kind === 'payment_auth') {
+      drawPaymentAuthPage(doc, item.letter, paymentAuth);
     }
   }
 

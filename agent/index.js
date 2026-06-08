@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { DateTime } from 'luxon';
 import * as bigquery from '../integrations/bigquery.js';
-import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount } from '../integrations/stripe.js';
+import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount, getPaymentAuthForDispute } from '../integrations/stripe.js';
 import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
@@ -414,7 +414,12 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.error('[agent] Product gap tracking failed (non-fatal):', err.message);
   }
 
-  return { booking, deadlineIso, timezone, allContacts, messages, analysis };
+  // Payment-authentication summary (for the auto payment-auth exhibit). Pulled
+  // from the dispute's charge; non-fatal (null on any failure). The PDF only
+  // surfaces it when CVC passed and the case is recognition-relevant.
+  const paymentAuth = await getPaymentAuthForDispute(dispute);
+
+  return { booking, deadlineIso, timezone, allContacts, messages, analysis, paymentAuth };
 }
 
 const PRODUCT_GAP_THRESHOLD = 3;
