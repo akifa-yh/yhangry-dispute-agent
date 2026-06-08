@@ -242,9 +242,18 @@ the chef INCURRED COSTS that the cancellation fee legitimately covers — never 
 of attendance or service delivery. Put the chef's cost / cancellation comment in
 evidence_to_include framed that way. Key evidence: the customer's own booking messages
 (initiation + a confirmation like "let's move forward"), the customer's cancellation
-message, the cancellation policy disclosure, and the chef's cost note. Layer the
-deadline argument on top ONLY if a complaint was also lodged late; otherwise the
-recognition + late-cancellation framing stands on its own.
+message, the cancellation policy disclosure, and the chef's cost note.
+
+DO NOT use the complaint-deadline argument in a cancellation case — never include a
+suggested_rebuttal_point claiming the cardholder "did not lodge a complaint within
+the T&C window" or that the dispute is "procedurally invalid", EVEN IF
+deadline_status is NO_COMPLAINT_FOUND or LATE_COMPLAINT. In a cancellation the
+cardholder demonstrably engaged (they cancelled and contacted us by platform
+message / email / chat), so "no complaint was lodged" contradicts our own exhibits
+and reads as false. The complaint deadline governs SERVICE complaints about an event
+that happened — it does not apply when no event took place. Lead only on (1)
+recognition / customer-initiated and (2) the late-cancellation fee; leave the
+complaint deadline out of the rebuttal entirely.
 
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
@@ -341,7 +350,11 @@ When narrative_provided is false:
 - If deadline_status is LATE_COMPLAINT or NO_COMPLAINT_FOUND, the
   deadline argument is decisive regardless of substance — go
   STRONG_COUNTER if we have policy disclosure + first-contact timing
-  (we usually do).
+  (we usually do). EXCEPTION: if chef_attendance_assessment =
+  EVENT_CANCELLED_BY_CUSTOMER, do NOT invoke the deadline / "no complaint
+  lodged" argument (the customer cancelled and engaged — see
+  CANCELLED-THEN-CHARGED ROUTING). Still go STRONG_COUNTER, but on
+  recognition + the late-cancellation fee.
 - If deadline_status is TIMELY_COMPLAINT, you don't yet know what the
   customer alleged, so you can't pick the strongest claim-mapping
   strategy. Cap at COUNTER_WITH_CAVEATS unless a SERVICE-RENDERED
@@ -461,7 +474,10 @@ for this case. The most common yhangry strategies are:
    Evidence pillars: cancellation_policy_disclosure, Aircall/Conduit
    timing showing first contact relative to deadline, checkout
    screenshot anchoring the policy. Strongest when deadline_status is
-   LATE_COMPLAINT or NO_COMPLAINT_FOUND.
+   LATE_COMPLAINT or NO_COMPLAINT_FOUND. NOT applicable to
+   EVENT_CANCELLED_BY_CUSTOMER cases — a cancellation is not a service
+   complaint, and the cardholder engaged, so this argument is false and
+   self-contradicting there (use CANCELLED-THEN-CHARGED ROUTING instead).
 
 2. SERVICE-RENDERED ARGUMENT — chef attended and completed the service,
    so any "not received" framing fails. Evidence pillars:
