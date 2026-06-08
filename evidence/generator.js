@@ -460,6 +460,17 @@ function drawBottomLineCallout(doc, callout) {
   doc.y = startY + totalH + 10;
 }
 
+// Currency-aware money formatting. The TRANSACTION cell previously hardcoded
+// "$", so GBP (UK-account) disputes mis-rendered as dollars (e.g. a £50 charge
+// showed "$50.00"). Derive the symbol from the dispute's actual currency.
+const CURRENCY_SYMBOLS = { usd: '$', gbp: '£', eur: '€', aud: 'A$', cad: 'C$' };
+function formatMoney(amountMinor, currency) {
+  const cur = String(currency || '').toLowerCase();
+  const amt = (Number(amountMinor || 0) / 100).toFixed(2);
+  const sym = CURRENCY_SYMBOLS[cur];
+  return sym ? `${sym}${amt}` : `${amt} ${cur.toUpperCase()}`.trim();
+}
+
 function drawFactsGrid(doc, dispute, booking, analysis) {
   // STATUS / recommendation / rebuttal_strategy are internal ops vocabulary
   // (STRONG_COUNTER, CLAIM_BY_CLAIM, etc.) that mean nothing to a bank
@@ -468,7 +479,7 @@ function drawFactsGrid(doc, dispute, booking, analysis) {
   const cells = [
     {
       label: 'TRANSACTION',
-      value: `$${(dispute.amount / 100).toFixed(2)}`,
+      value: formatMoney(dispute.amount, dispute.currency),
       sub: dispute.network_reason_code || dispute.reason || '—',
     },
     {
