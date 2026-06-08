@@ -218,7 +218,17 @@ no-refund window (to cover ingredients / prep already incurred) exactly as they 
 for completed events. A submitted survey proves the chef is OWED money — NOT that the
 dinner took place. Route the case per "CANCELLED-THEN-CHARGED ROUTING" below.
 
-If the customer did NOT cancel, assess chef attendance normally:
+If the customer did NOT cancel, check next whether the CHEF ATTENDED but the CUSTOMER
+was a no-show / failed to provide access — the chef travelled to the venue and was
+ready to perform, but the customer was not present (or did not open the door / grant
+entry), so the booked event could not go ahead. Signals: chef messages such as
+"nobody answered", "rang the doorbell", "waited / hung around", "no one was home",
+"couldn't get in"; the customer's own messages admitting absence ("we won't be home",
+"we were out", "we will not be at the house"). If so, set chef_attendance_assessment
+= CUSTOMER_NO_SHOW — do NOT mark it CONFIRMED and do NOT claim service was delivered
+(no service occurred). Route per "CUSTOMER-NO-SHOW ROUTING" below.
+
+If the customer neither cancelled nor no-showed, assess chef attendance normally:
 - chef_submitted_payment_survey = true — with no cancellation, the chef completed and
   was paid for the job; this is strong proof of attendance. Mark attendance CONFIRMED.
 - Direct messages from the chef (e.g. "I'm on my way", "running late", ETA messages)
@@ -254,6 +264,30 @@ and reads as false. The complaint deadline governs SERVICE complaints about an e
 that happened — it does not apply when no event took place. Lead only on (1)
 recognition / customer-initiated and (2) the late-cancellation fee; leave the
 complaint deadline out of the rebuttal entirely.
+
+CUSTOMER-NO-SHOW ROUTING:
+When chef_attendance_assessment = CUSTOMER_NO_SHOW, NO service was delivered, so
+rebuttal_strategy MUST NOT be SERVICE_RENDERED — set rebuttal_strategy =
+CUSTOMER_NO_SHOW. The winning frame is "the merchant performed; the cardholder caused
+the non-delivery." Lead with:
+  (1) The chef travelled to the venue and was ready to perform at the agreed time
+      (cite arrival evidence + any timestamped ingredient photos / Google-Maps
+      drive-time the chef provided).
+  (2) The cardholder failed to be present or to provide access, so the booked event
+      could not proceed — the cardholder's own doing, not a merchant failure.
+  (3) The chef's payment survey = the chef ATTENDED and incurred costs for an
+      abandoned event — NEVER frame it as "service completed".
+INDEPENDENCE: the chef's own "nobody answered" account is LOW independence. Lead with
+the CUSTOMER'S OWN messages admitting absence (HIGH independence). If the only proof
+of attendance is the chef's word + survey, still set CUSTOMER_NO_SHOW but record the
+corroboration gap (no GPS / arrival photo) in evidence_weaknesses.
+ACCESS CODES — ADDRESS HEAD-ON: if the customer provided access codes, do NOT ignore
+it (the cardholder will argue "I gave you the code, you no-showed"). Distinguish a
+GATE-only code (chef still needed someone to open the house door → the customer's
+absence is the cause) from a HOUSE/door code (if provided and unused, that is a
+genuine weakness — surface it in evidence_weaknesses, don't bury it). The
+no-timely-complaint (deadline) argument is a valid SECONDARY here, since a real event
+was expected and the customer raised no timely complaint.
 
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
@@ -526,8 +560,9 @@ the recommendation when a strong strategy exists.
     HIGH-independence proof (chef survey) AND the customer did NOT cancel
     the event, and the dispute reason is "not received" or similar. NEVER
     use SERVICE_RENDERED when chef_attendance_assessment =
-    EVENT_CANCELLED_BY_CUSTOMER — the event did not happen; use the
-    CANCELLED-THEN-CHARGED routing instead.
+    EVENT_CANCELLED_BY_CUSTOMER or CUSTOMER_NO_SHOW — no service was delivered
+    in either case; use the CANCELLED-THEN-CHARGED or CUSTOMER-NO-SHOW routing
+    instead.
   - CUSTOMER-INITIATED ARGUMENT works: the customer has clear platform
     actions (sent messages, menu negotiation) defeating a fraud
     framing.
@@ -862,8 +897,8 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
       "why_unaddressed": "one sentence on what data we'd need but don't have to address this claim"
     }
   ],
-  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER. Use EVENT_CANCELLED_BY_CUSTOMER when the customer cancelled before the event so it never happened — a submitted chef payment survey is a payment claim that also covers late-cancellation costs, NOT proof of attendance or service delivery.",
-  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD. ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES.",
+  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER | CUSTOMER_NO_SHOW. EVENT_CANCELLED_BY_CUSTOMER = customer cancelled before the event so it never happened. CUSTOMER_NO_SHOW = the chef attended but the customer was absent / did not provide access, so no service occurred. In BOTH cases a submitted chef payment survey is a payment claim that covers incurred costs, NOT proof of attendance or service delivery.",
+  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CUSTOMER_NO_SHOW | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD. CUSTOMER_NO_SHOW = chef attended but the cardholder was absent / failed to provide access, so no service occurred (see CUSTOMER-NO-SHOW ROUTING). ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES.",
   "evidence_strength": "STRONG | MODERATE | WEAK | N/A. Use N/A only when recommendation is ACCEPT (no submission is being prepared).",
   "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT OR CUSTOMER_OUTREACH.",
   "reasoning": "2-4 sentences summarising why, leading with the chosen rebuttal_strategy and the PRIMARY evidence supporting it. If narrative_provided is false, mark the recommendation as provisional.",

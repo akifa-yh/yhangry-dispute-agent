@@ -110,8 +110,17 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   if (!dispute.charge && dispute.id) {
     try {
       const { dispute: full } = await fetchDisputeFromEitherAccount(dispute.id);
-      dispute = full;
-      console.log(`[agent] Hydrated dispute ${disputeId} from Stripe (charge=${dispute.charge})`);
+      // Preserve caller-supplied overrides (e.g. a VROL-corrected reason code).
+      // The re-fetched Stripe dispute often carries a stale/empty
+      // network_reason_code that would otherwise CLOBBER the VROL value and
+      // defeat the whole VROL flow — the matrix playbook lookup misses and the
+      // analysis silently runs on general rules. (Brad Gabrys 13.1, 2026-06.)
+      dispute = {
+        ...full,
+        network_reason_code: dispute.network_reason_code || full.network_reason_code,
+        reason: dispute.reason || full.reason,
+      };
+      console.log(`[agent] Hydrated dispute ${disputeId} from Stripe (charge=${dispute.charge}, reason_code=${dispute.network_reason_code || 'none'})`);
     } catch (err) {
       console.warn(`[agent] Could not hydrate dispute ${disputeId} from Stripe: ${err.message}`);
     }

@@ -18,6 +18,7 @@ const ATTENDANCE_EMOJI = {
   UNCONFIRMED: ':question:',
   NO_SHOW: ':rotating_light:',
   EVENT_CANCELLED_BY_CUSTOMER: ':no_entry_sign:',
+  CUSTOMER_NO_SHOW: ':ghost:',
 };
 
 const INDEPENDENCE_EMOJI = {
@@ -324,13 +325,14 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
   // straight into info@yhangry.com without picking around formatting.
   const draftEmail = analysis.suggested_customer_email;
   if (
+    analysis.recommendation === 'CUSTOMER_CONTACT_FIRST' &&
     draftEmail &&
     typeof draftEmail === 'object' &&
     (draftEmail.subject || draftEmail.body)
   ) {
     const subject = (draftEmail.subject || '').trim();
     const body = (draftEmail.body || '').trim();
-    if (body) {
+    if (body && body.toLowerCase() !== 'null') {
       blocks.push({ type: 'divider' });
       const subjectLine = subject ? `*Subject:* ${subject}\n\n` : '';
       // Render body as a Slack mrkdwn block-quote (each line prefixed with
