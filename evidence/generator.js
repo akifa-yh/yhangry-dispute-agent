@@ -945,7 +945,8 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // framing is misleading when the dispute is about a late cancellation, not a
   // post-event complaint — and it omits the actual cancellation event).
   if (!analysis.customer_admission_detected &&
-      analysis.chef_attendance_assessment !== 'EVENT_CANCELLED_BY_CUSTOMER') {
+      analysis.chef_attendance_assessment !== 'EVENT_CANCELLED_BY_CUSTOMER' &&
+      analysis.chef_attendance_assessment !== 'CUSTOMER_NO_SHOW') {
     drawCompactTimeline(doc, analysis, dispute, booking);
   }
 

@@ -63,6 +63,7 @@ export async function analyseExhibits({ images, dispute, analysis, booking }) {
   if (!images?.length) return [];
 
   const customerName = `${booking?.first_name || ''} ${booking?.last_name || ''}`.trim();
+  const eventDateStr = booking?.event_date?.value || (booking?.event_date ? String(booking.event_date) : 'unknown');
   const reasoning = (analysis?.reasoning || '').slice(0, 800);
   const rebuttalPoints = (analysis?.suggested_rebuttal_points || []).join('; ').slice(0, 800);
   const admissionQuote = analysis?.customer_admission_detected
@@ -95,6 +96,8 @@ DISPUTE CONTEXT (for your reasoning only — do NOT quote in output):
 - Stripe reason: ${dispute.reason || 'N/A'}
 - Network reason code: ${dispute.network_reason_code || 'N/A'}
 - Customer: ${customerName || 'unknown'}
+- Booking #: ${booking?.order_id || 'unknown'}
+- Event date: ${eventDateStr} — exhibit dates should fall on or very near this (the event day, or the days just before for ingredients / prep / travel). A date in a different month or year is almost certainly a misread.
 - Internal recommendation: ${analysis?.recommendation || 'N/A'}
 - Internal rebuttal strategy: ${analysis?.rebuttal_strategy || 'N/A'}
 - Internal reasoning (truncated): ${reasoning}
@@ -103,13 +106,18 @@ ${admissionQuote ? `- Cardholder admission text on record: "${admissionQuote}"` 
 
 I will provide ${images.length} image${images.length === 1 ? '' : 's'}. For EACH image, in upload order (index 0 first), identify what it shows and produce:
 
-  document_label  — a short noun phrase identifying the document. Be specific:
-                    include any visible dates, reference numbers, sender/receiver
-                    names, transaction IDs etc. that appear in the image.
+  document_label  — a short noun phrase identifying WHAT the document is (type +
+                    sender where clear). Be CAREFUL with dates, addresses and
+                    reference numbers: include a date ONLY if it is clearly legible
+                    AND consistent with the event date above. If a date you read would
+                    land in a different month/year than the event, you have almost
+                    certainly misread it — re-read; if still unsure, describe the
+                    document WITHOUT asserting a date (the image itself shows the date
+                    to the reviewer). NEVER guess a date, address or reference number.
                     Examples:
                       "American Express dispute confirmation letter dated 1 May 2026"
-                      "Stripe events log showing $20 refund completed then failed on 29-30 Apr 2026"
-                      "Customer email dated 30 Apr 2026 stating 'I have cancelled the dispute'"
+                      "Supermarket receipt for groceries purchased for the booking"
+                      "Google Maps drive-time from the chef's kitchen to the venue"
 
   proves          — 1-2 sentences explaining what this image proves about the
                     MERCHANT's counter to the dispute. Frame in terms relevant
@@ -203,24 +211,25 @@ preamble outside the JSON. Schema:
 
   console.log(`[exhibit_analyser] Sending ${images.length} image(s) to Gemini Vision for ${dispute.id}`);
 
-  let result;
-  try {
-    result = await getAi().models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ role: 'user', parts }],
-      config: {
-        // Bumped from 4096 → 32768 on 2026-05-20 after the Khushbu Aggarwal
-        // submission truncated mid-entry-2 with 10 images. Each rich
-        // {document_label, proves} entry takes ~1000-1500 tokens; 10 images
-        // can comfortably exceed 4k. 32k gives generous headroom for the
-        // max-10 case + leaves margin if Gemini gets more verbose.
-        maxOutputTokens: 32768,
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-      },
-    });
-  } catch (err) {
-    console.error('[exhibit_analyser] Gemini call failed:', err?.message || err);
+  // Use the stronger Pro model for exhibit vision — Flash misreads dates/text off
+  // images (e.g. a grocery receipt read as "May 30 2020" instead of 26 May 2026, a
+  // drive-time screenshot read as "June 2"). Fall back to Flash if Pro errors (e.g.
+  // not provisioned in the region) so we degrade rather than break.
+  // maxOutputTokens 32768 (bumped from 4096 on 2026-05-20 — the Khushbu 10-image
+  // case truncated mid-entry at 4k; each rich entry is ~1000-1500 tokens).
+  const config = { maxOutputTokens: 32768, temperature: 0.2, responseMimeType: 'application/json' };
+  let result = null;
+  for (const model of ['gemini-2.5-pro', 'gemini-2.5-flash']) {
+    try {
+      result = await getAi().models.generateContent({ model, contents: [{ role: 'user', parts }], config });
+      console.log(`[exhibit_analyser] Vision via ${model}`);
+      break;
+    } catch (err) {
+      console.warn(`[exhibit_analyser] ${model} failed: ${err?.message || err}`);
+    }
+  }
+  if (!result) {
+    console.error('[exhibit_analyser] All vision models failed');
     return null;
   }
 
