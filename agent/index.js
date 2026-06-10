@@ -51,10 +51,30 @@ const ai = new GoogleGenAI({
   googleAuthOptions,
 });
 
+// Retry the Vertex generateContent call on transient 429 / RESOURCE_EXHAUSTED
+// (per-minute quota spikes — common when ops re-runs a dispute repeatedly).
+// Backoff spans ~50s so a per-minute limit can reset; any non-429 error (or the
+// final 429) propagates. Added 2026-06-09 after a 429 hard-failed PDF generation
+// during the Brad Gabrys re-runs.
+async function generateContentWithRetry(params) {
+  const delays = [5000, 15000, 30000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (err) {
+      const msg = err?.message || String(err);
+      const is429 = err?.status === 429 || err?.code === 429 || /RESOURCE_EXHAUSTED|\b429\b/i.test(msg);
+      if (!is429 || attempt >= delays.length) throw err;
+      console.warn(`[agent] Vertex 429 (RESOURCE_EXHAUSTED) — retry ${attempt + 1}/${delays.length} in ${delays[attempt]}ms`);
+      await new Promise((r) => setTimeout(r, delays[attempt]));
+    }
+  }
+}
+
 async function runAgent(data) {
   const userMessage = buildUserMessage(data);
 
-  const result = await ai.models.generateContent({
+  const result = await generateContentWithRetry({
     model: 'gemini-2.5-flash',
     contents: userMessage,
     config: {
