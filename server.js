@@ -487,42 +487,32 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
     });
 
     // CURATION: when vision drove every description (auto mode), order by
-    // relevance and DROP non-load-bearing exhibits. Ops uploads everything
-    // they have for context; the agent decides what goes into the bank
-    // submission. Bank reviewers skim — a tight 3-5 exhibit pack with the
-    // smoking guns outperforms a 10-exhibit pack that buries them.
+    // relevance and drop ONLY what Vision flagged as irrelevant/unreadable. Ops
+    // curates what they upload, so the agent must NOT second-guess and drop
+    // relevant evidence (Aki's call 2026-06: "all the evidence should be
+    // included"). The earlier ladder dropped MEDIUM whenever 2+ HIGH existed,
+    // which silently cut the receipt + ingredient photos from the Brad no-show
+    // pack down to 2 exhibits.
     //
-    // Filter ladder:
-    //   1. Drop NONE always (Vision deemed irrelevant).
-    //   2. Drop LOW always (tangential — padding hurts).
-    //   3. If 2+ HIGH exhibits exist, drop MEDIUM too (keep only HIGH —
-    //      strongest possible submission).
-    //   4. Else if <2 HIGH but some MEDIUM, keep HIGH + MEDIUM (so the
-    //      submission isn't empty when Vision's HIGH bar was harsh).
-    //   5. Hard cap at MAX_EXHIBITS (6) for both readability and Stripe
-    //      file-size sanity.
+    //   1. Drop NONE (wrong customer / off-topic / unreadable) — keeping these
+    //      would look careless to a reviewer.
+    //   2. Keep LOW / MEDIUM / HIGH — everything ops deliberately uploaded.
+    //   3. Sort HIGH-first for ordering; hard cap at MAX_EXHIBITS as a backstop.
     //
-    // Manual mode (ops typed descriptions) skips curation — ops's choice.
-    const MAX_EXHIBITS = 6;
+    // Manual mode (ops typed descriptions) skips curation entirely.
+    const MAX_EXHIBITS = 10;
     if (visionRecords && !hasAnyManualDescription) {
       const sortedVisionRecords = sortByRelevance(visionRecords);
       const byOrigIndex = new Map(exhibits.map((e) => [e._origIndex, e]));
 
-      const droppedNoneOrLow = [];
-      const droppedMedium = [];
+      const droppedNone = [];
       const droppedOverCap = [];
 
       const kept = [];
-      const highOnly = sortedVisionRecords.filter((r) => r.relevance === 'HIGH');
-      const useHighOnly = highOnly.length >= 2;
       for (const r of sortedVisionRecords) {
         const exhibit = byOrigIndex.get(r.index);
-        if (r.relevance === 'NONE' || r.relevance === 'LOW') {
-          droppedNoneOrLow.push(`${r.filename}=${r.relevance}`);
-          continue;
-        }
-        if (useHighOnly && r.relevance !== 'HIGH') {
-          droppedMedium.push(`${r.filename}=${r.relevance}`);
+        if (r.relevance === 'NONE') {
+          droppedNone.push(`${r.filename}=${r.relevance}`);
           continue;
         }
         if (kept.length >= MAX_EXHIBITS) {
@@ -535,20 +525,17 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
       exhibits.splice(0, exhibits.length, ...kept);
 
       console.log(
-        `[server] Exhibit curation for ${dispute.id}: kept ${kept.length}/${sortedVisionRecords.length}` +
-          ` (${useHighOnly ? 'HIGH-only mode' : 'HIGH+MEDIUM fallback'}, cap=${MAX_EXHIBITS})`
+        `[server] Exhibit curation for ${dispute.id}: kept ${kept.length}/${sortedVisionRecords.length} (drop NONE only, cap=${MAX_EXHIBITS})`
       );
-      if (droppedNoneOrLow.length)
-        console.log(`[server]   dropped LOW/NONE: ${droppedNoneOrLow.join(', ')}`);
-      if (droppedMedium.length)
-        console.log(`[server]   dropped MEDIUM (HIGH-only mode): ${droppedMedium.join(', ')}`);
+      if (droppedNone.length)
+        console.log(`[server]   dropped NONE: ${droppedNone.join(', ')}`);
       if (droppedOverCap.length)
         console.log(`[server]   dropped over cap: ${droppedOverCap.join(', ')}`);
     }
 
     if (exhibits.length === 0) {
       throw new Error(
-        'No exhibits passed curation — all uploaded files scored LOW/NONE relevance. ' +
+        'No exhibits passed curation — all uploaded files scored NONE (irrelevant/unreadable). ' +
           'Re-upload more relevant evidence, or supply manual descriptions to skip curation.'
       );
     }
@@ -563,7 +550,7 @@ slackApp.view('upload_evidence_submitted', async ({ ack, body, view }) => {
     const customerName = `${result.booking.first_name || ''} ${result.booking.last_name || ''}`.trim() || 'Cardholder';
     const pdfBuffer = await generateEvidence({
       analysis: result.analysis,
-      dispute,
+      dispute: result.dispute || dispute,
       booking: result.booking,
       platformMessages: result.messages,
       allContacts: result.allContacts,

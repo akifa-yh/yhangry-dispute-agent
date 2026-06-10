@@ -439,7 +439,10 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   // surfaces it when CVC passed and the case is recognition-relevant.
   const paymentAuth = await getPaymentAuthForDispute(dispute);
 
-  return { booking, deadlineIso, timezone, allContacts, messages, analysis, paymentAuth };
+  // Return the (hydrated) dispute too — it carries currency, charge, etc. that
+  // the stripped button/modal payload lacks, so the PDF can render the right
+  // currency symbol instead of a bare amount.
+  return { booking, deadlineIso, timezone, allContacts, messages, analysis, paymentAuth, dispute };
 }
 
 const PRODUCT_GAP_THRESHOLD = 3;
