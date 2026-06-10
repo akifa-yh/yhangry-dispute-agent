@@ -273,7 +273,7 @@ function pickBottomLine(analysis, dispute, booking) {
   if (analysis.chef_attendance_assessment === 'CUSTOMER_NO_SHOW') {
     return {
       headline: 'CARDHOLDER WAS NOT PRESENT TO RECEIVE THE BOOKED SERVICE',
-      detail: "The chef travelled to the venue and was ready to perform at the agreed time, but the cardholder was not present and did not provide access — confirmed by the cardholder's own messages — so the booked event could not go ahead. The non-delivery was the cardholder's own doing, not a merchant failure; the chef attended and incurred costs for the abandoned booking.",
+      detail: "The chef travelled to the venue and was ready to perform at the agreed time, but the cardholder was not present to admit the chef or host the event — confirmed by the cardholder's own messages — so the booked service could not go ahead. The non-delivery was the cardholder's own doing, not a merchant failure; the chef attended and incurred costs for the abandoned booking.",
       tone: 'strong',
     };
   }

@@ -273,10 +273,16 @@ the non-delivery." Lead with:
   (1) The chef travelled to the venue and was ready to perform at the agreed time
       (cite arrival evidence + any timestamped ingredient photos / Google-Maps
       drive-time the chef provided).
-  (2) The cardholder failed to be present or to provide access, so the booked event
-      could not proceed — the cardholder's own doing, not a merchant failure.
+  (2) The cardholder was not present to admit the chef or host the event, so the
+      booked service could not proceed — the cardholder's own doing, not a merchant
+      failure. Frame this purely as ABSENCE (see ACCESS CODES below).
   (3) The chef's payment survey = the chef ATTENDED and incurred costs for an
       abandoned event — NEVER frame it as "service completed".
+  (4) The customer's post-event conduct: the chef followed up (e.g. the next day)
+      offering to reschedule and the customer was unresponsive / went MIA, and the
+      customer raised no timely complaint — only escalating to a dispute days later.
+      That pattern is inconsistent with someone who genuinely waited for a chef who
+      never arrived, and reinforces that the non-delivery was the customer's doing.
 INDEPENDENCE: the chef's own "nobody answered" account is LOW independence. Lead with
 the CUSTOMER'S OWN messages admitting absence (HIGH independence). If the only proof
 of attendance is the chef's word + survey, still set CUSTOMER_NO_SHOW but record the
@@ -286,9 +292,13 @@ the customer to admit them and be present to host. Treat any access code the cus
 sent as GATE / building access only, UNLESS the platform/email messages show the
 customer EXPLICITLY told the chef to let themselves in and start prepping in the
 customer's absence. Absent such an instruction, the chef reasonably waited to be
-admitted, and the customer's failure to appear is the cause of non-delivery. Frame it
-that way: the chef attended, waited to be let in, the customer never showed; the next
-day the chef followed up offering to reschedule and the customer was unresponsive.
+admitted, and the customer's failure to appear is the cause of non-delivery. In the
+headline and rebuttal points, frame purely on the customer's ABSENCE — the chef
+attended and waited to be let in, but the customer was not present to admit them or
+host the event. Do NOT write that the customer "provided access codes" or that they
+"did not provide access" — mentioning the codes concedes a point and reads as
+self-contradictory ("not present" sitting next to "provided codes"); the gate code did
+not grant entry to the residence and the customer's presence was required regardless.
 Do NOT volunteer a chef's momentary inability to load the app / website as a "platform
 technical failure" or merchant fault — a transient connectivity glitch at a remote
 venue (especially when the code arrives last-minute with the chef already en route) is
