@@ -151,7 +151,7 @@ const visa_12_3 = {
     agreed_service_description:
       'Booking confirmation email showing the price in the merchant\'s billing currency. ALWAYS include for 12.x codes.',
     currency_disclosure_at_checkout:
-      'yhangry checkout displays pricing in the merchant\'s billing currency throughout. Include the checkout screenshot (assets/checkout-click-to-accept.jpeg) — same asset used for 13.x click-to-accept.',
+      'The yhangry checkout requires acceptance of the booking terms before payment (assets/checkout-terms-acceptance.jpeg, the same terms-acceptance asset used for 13.x click-to-accept); those terms bind the customer to the merchant-currency price. The exact per-booking amount and currency are evidenced by payment_receipt + the booking confirmation above — lead the currency-match argument with those, not the checkout image.',
     customer_initiated_booking_proof:
       'Platform messages from customer engaging with the booking before payment.',
     customer_admission:
@@ -193,7 +193,7 @@ const visa_12_5 = {
     agreed_service_description:
       'Booking confirmation email showing "Total cost" and "Amount paid" in merchant currency. ALWAYS include.',
     currency_disclosure_at_checkout:
-      'yhangry checkout displays merchant-currency pricing throughout. Include the checkout screenshot (assets/checkout-click-to-accept.jpeg).',
+      'The yhangry checkout requires acceptance of the booking terms before payment (assets/checkout-terms-acceptance.jpeg); the exact merchant-currency amount is shown in payment_receipt + the booking confirmation above — lead the currency-match argument with those.',
     customer_initiated_booking_proof:
       'Platform messages from customer pre-payment showing engagement with the booking.',
     customer_admission:
@@ -355,7 +355,7 @@ const visa_13_3 = {
     agreed_service_description:
       'Pre-event platform messages where chef proposed the menu and customer accepted (look for "Your quote has been updated" + "All set!" type pattern).',
     click_to_accept_timestamp:
-      'Per-user timestamped click-to-accept is not yet captured on the booking record (KP product work pending). The agent auto-embeds the yhangry checkout screenshot (assets/checkout-click-to-accept.jpeg) as a dedicated page in the evidence PDF for this code, demonstrating that booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.',
+      'Per-user timestamped click-to-accept is not yet captured on the booking record (KP product work pending). The agent auto-embeds the yhangry checkout terms-acceptance screenshot (assets/checkout-terms-acceptance.jpeg) as a dedicated page in the evidence PDF for this code, demonstrating that booking terms, privacy policy, and stored-payment authorisation are surfaced and acceptance is required before payment can complete.',
     chef_attendance_proof:
       'chef_submitted_payment_survey = true (HIGH). is_chef_ready_response / is_chef_on_time_response. Day-of arrival messages from chef.',
     service_delivery_proof:

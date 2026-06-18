@@ -9,10 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Click-to-Accept screenshot helpers (Tyler retro #4)
 // ============================================================================
 // Codes where the yhangry checkout screenshot is required evidence per the
-// matrix. For 13.x and MC 4853/4860 it proves click-to-accept on T&Cs /
-// cancellation policy. For 12.x (processing-error codes added in retro #9)
-// it doubles as currency_disclosure_at_checkout — proving the merchant-
-// currency price was shown to the customer pre-payment.
+// matrix. The asset is cropped to the terms-acceptance line (no live price), so
+// it proves click-to-accept on the booking terms / privacy policy / stored-
+// payment authorisation. For 12.x processing-error codes the actual merchant-
+// currency amount is evidenced by the receipt + booking confirmation, not this
+// image (see evidence_matrix currency_disclosure_at_checkout).
 const CLICK_TO_ACCEPT_CODES = new Set([
   'visa:12.3', 'visa:12.5', 'visa:12.6.1', 'visa:12.6.2',
   'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
@@ -53,17 +54,22 @@ function shouldEmbedCancellationTermsScreenshot(dispute) {
 }
 
 function drawCheckoutScreenshotPage(doc, letter) {
-  const imgPath = path.join(__dirname, '..', 'assets', 'checkout-click-to-accept.jpeg');
+  // Cropped to the terms-acceptance line only. The full checkout screenshot
+  // hard-codes a specific amount ($1040), which mis-renders on every dispute of
+  // a different value (Aki, 2026-06: "including a mismatched amount looks sloppy
+  // and invites doubt"). The cropped line still proves terms were shown +
+  // accepted at checkout, with no stale figure to contradict the dispute amount.
+  const imgPath = path.join(__dirname, '..', 'assets', 'checkout-terms-acceptance.jpeg');
   if (!fs.existsSync(imgPath)) {
-    console.warn('[evidence] checkout-click-to-accept.jpeg missing — skipping screenshot page');
+    console.warn('[evidence] checkout-terms-acceptance.jpeg missing — skipping screenshot page');
     return;
   }
   doc.addPage();
   exhibitHeading(doc,
     letter ? `Exhibit ${letter}` : 'yhangry Checkout — Click-to-Accept Disclosure',
-    'yhangry checkout screenshot — booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance required before payment.'
+    'yhangry checkout — agreement to the yhangry booking terms (and privacy policy) is a mandatory step before a booking can be confirmed and paid for.'
   );
-  doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
+  doc.image(imgPath, 50, doc.y, { fit: [495, 200], align: 'center' });
 }
 
 function drawCancellationTermsPage(doc, letter) {
@@ -75,7 +81,7 @@ function drawCancellationTermsPage(doc, letter) {
   doc.addPage();
   exhibitHeading(doc,
     letter ? `Exhibit ${letter}` : 'yhangry Booking Terms — Cancellation Policy',
-    'yhangry booking terms (yhangry.com/booking-terms) — cancellation/refund clauses the customer agreed to at checkout. 100% cancellation fee within 7 days of booking time.'
+    'yhangry booking terms (yhangry.com/booking-terms) — cancellation/refund clauses the customer agreed to at checkout: 100% retained for a cancellation within 7 days of the booking time, or where the customer fails to attend the booked service.'
   );
   doc.image(imgPath, 50, doc.y, { fit: [495, 640], align: 'center' });
 }
@@ -438,6 +444,11 @@ function drawPaymentAuthPage(doc, letter, pa) {
 function buildAttachedExhibitList({ dispute, analysis, platformMessages, allContacts, exhibits, paymentAuth }) {
   const items = [];
   const isCancelled = analysis?.chef_attendance_assessment === 'EVENT_CANCELLED_BY_CUSTOMER';
+  // No-shows turn on the same booking-terms evidence as cancellations: the
+  // checkout acceptance + the cancellation policy's "fail to attend" clause.
+  // (Brad Gabrys, 2026-06 — previously these had to be hand-built for no-shows.)
+  const isNoShow = analysis?.chef_attendance_assessment === 'CUSTOMER_NO_SHOW';
+  const termsRelevant = isCancelled || isNoShow;
   const hasUploads = (exhibits || []).some((ex) => ex?.source);
 
   // 1. Auto-rendered platform-messages chat. Suppressed when ops has uploaded
@@ -487,19 +498,21 @@ function buildAttachedExhibitList({ dispute, analysis, platformMessages, allCont
   //    cancelled-then-charged disputes (isCancelled): the checkout screenshot
   //    proves the customer agreed to the booking terms, and the cancellation-
   //    terms screenshot proves the no-refund policy they are bound by.
-  if (shouldEmbedCheckoutScreenshot(dispute) || isCancelled) {
+  if (shouldEmbedCheckoutScreenshot(dispute) || termsRelevant) {
     items.push({
       kind: 'checkout',
       document: 'yhangry checkout screenshot',
-      proves: 'Booking terms, privacy policy, and merchant-currency pricing are surfaced at checkout; acceptance is required before payment.',
+      proves: 'The cardholder agreed to the yhangry booking terms at checkout; acceptance is required before a booking can be confirmed and paid for.',
     });
   }
 
-  if (shouldEmbedCancellationTermsScreenshot(dispute) || isCancelled) {
+  if (shouldEmbedCancellationTermsScreenshot(dispute) || termsRelevant) {
     items.push({
       kind: 'cancellation_terms',
       document: 'yhangry booking terms — cancellation policy',
-      proves: 'Cancellation/refund clauses the customer agreed to at checkout (yhangry.com/booking-terms): 100% cancellation fee within 7 days of booking time, no refund after Grace Period.',
+      proves: isNoShow
+        ? 'Booking terms the cardholder agreed to at checkout (yhangry.com/booking-terms): yhangry retains 100% of the booking price where the customer "fails to attend the delivery of the Professional Services at the Booking Time at the Designated Premises" — the no-show clause directly applicable here.'
+        : 'Cancellation/refund clauses the customer agreed to at checkout (yhangry.com/booking-terms): 100% cancellation fee within 7 days of booking time, no refund after Grace Period.',
     });
   }
 

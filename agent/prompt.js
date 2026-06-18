@@ -283,6 +283,14 @@ the non-delivery." Lead with:
       customer raised no timely complaint — only escalating to a dispute days later.
       That pattern is inconsistent with someone who genuinely waited for a chef who
       never arrived, and reinforces that the non-delivery was the customer's doing.
+  (5) CONTRACTUAL BASIS — under yhangry's booking terms (which the cardholder
+      accepted at checkout), yhangry is entitled to retain 100% of the booking
+      price as a Cancellation Fee where the customer "fail[s] to attend the
+      delivery of the Professional Services at the Booking Time at the Designated
+      Premises" — a literal no-show clause. Add a suggested_rebuttal_point citing
+      it as the contractual basis that the charge is properly retained, and
+      anchor it on cancellation_policy_disclosure (the booking terms + checkout
+      acceptance are auto-attached as exhibits for no-shows).
 INDEPENDENCE: the chef's own "nobody answered" account is LOW independence. Lead with
 the CUSTOMER'S OWN messages admitting absence (HIGH independence). If the only proof
 of attendance is the chef's word + survey, still set CUSTOMER_NO_SHOW but record the

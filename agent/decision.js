@@ -115,6 +115,54 @@ function formatDeadline(analysis) {
  *   "Updated with customer narrative at <ts>" header line above the title
  *   so ops can see at a glance that this analysis was re-run after a paste.
  */
+// Maps the analysis to the answers ops should pick on Stripe's guided
+// dispute-evidence form ("Tell us about the dispute" + product/service steps).
+// Exact option wording varies by card brand, so we give the substance plus the
+// closest-match label. Returns a mrkdwn string, or null when there is no counter
+// to submit (ACCEPT / contact-first). Added 2026-06 after the Brad Gabrys case,
+// where deciding these form answers took a dozen manual back-and-forth messages.
+function buildStripeFormGuidance(dispute, analysis, booking) {
+  const rec = analysis?.recommendation;
+  if (rec === 'ACCEPT' || rec === 'CUSTOMER_CONTACT_FIRST') return null;
+
+  const attend = analysis?.chef_attendance_assessment;
+  const strat = analysis?.rebuttal_strategy;
+  const isNoShow = attend === 'CUSTOMER_NO_SHOW' || strat === 'CUSTOMER_NO_SHOW';
+  const isCancelled = attend === 'EVENT_CANCELLED_BY_CUSTOMER' || strat === 'EVENT_CANCELLED_BY_CUSTOMER';
+  const isRendered = strat === 'SERVICE_RENDERED' || attend === 'CONFIRMED' || attend === 'LIKELY';
+
+  let winLabel, winOther;
+  if (isRendered) {
+    winLabel = '"The cardholder received the product or service"';
+  } else if (isNoShow) {
+    winLabel = '"Other"';
+    winOther = 'Customer no-show — the chef attended and was ready to perform at the agreed time; the cardholder was not present to receive the service.';
+  } else if (isCancelled) {
+    winLabel = '"Other"';
+    winOther = 'The cardholder personally booked this and then cancelled within the non-refundable window; the amount is the agreed cancellation fee under our booking terms.';
+  } else if (strat === 'CUSTOMER_INITIATED') {
+    winLabel = '"Other"';
+    winOther = 'The cardholder personally made and authorised this booking through their own account; the payment passed CVC and billing-postcode checks. This is not an unrecognised or unauthorised charge.';
+  } else {
+    winLabel = '"Other"';
+    winOther = 'The service was provided as booked and the cardholder did not raise a timely complaint.';
+  }
+
+  const lines = [];
+  lines.push(`• *Why should you win:* ${winLabel}`);
+  if (winOther) lines.push(`     ↳ in the "Other" box, paste: _${winOther}_`);
+  lines.push('• *Product / service type:* "Offline service" (or "Booking or reservation")');
+  if (booking?.order_id) lines.push(`• *Booking number:* ${booking.order_id}`);
+  lines.push(`• *Booking status* (if asked): *${isCancelled ? 'Cancelled' : 'Active'}*`);
+  if (booking?.event_date) lines.push(`• *Booking start date:* ${formatEventDate(booking.event_date)}`);
+  lines.push('• *Offered a credit or voucher:* No');
+  lines.push((isNoShow || isCancelled)
+    ? '• *Showed refund & cancellation terms:* Yes → the booking-terms page is already in the generated PDF; tag that upload category *"Refund & cancellation policy"*.'
+    : '• *Showed refund & cancellation terms:* Yes (accepted at checkout) — attach the booking-terms page as *"Refund & cancellation policy"* if submitting it.');
+
+  return lines.join('\n');
+}
+
 export function formatSlackMessage(analysis, dispute, booking, options = {}) {
   const amount = (dispute.amount / 100).toFixed(2);
   const recEmoji = RECOMMENDATION_EMOJI[analysis.recommendation] || ':question:';
@@ -497,6 +545,19 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       text: `*Reasoning:*\n${analysis.reasoning || 'N/A'}${flagsBlock}`,
     },
   });
+
+  // Stripe form cheat-sheet — tells ops exactly which guided-form options to
+  // pick when submitting this dispute (added after the Brad Gabrys case).
+  const formGuidance = buildStripeFormGuidance(dispute, analysis, booking);
+  if (formGuidance) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*:clipboard: Stripe form cheat-sheet*  _(exact labels vary by card brand — match the closest)_\n${formGuidance}`,
+      },
+    });
+  }
 
   blocks.push({ type: 'divider' });
 
