@@ -20,6 +20,74 @@ function getStripeUs() {
 export { getStripeUk as stripe };
 export { getStripeUs };
 
+// ============================================================================
+// Monthly dispute-ratio report (posted to #stripe-disputes on the 1st of each
+// month). Ratio = disputes filed ÷ paid charges, per account, per calendar
+// month. A dispute counts the moment it is filed regardless of outcome — this
+// mirrors how Visa/Mastercard compute the monitoring ratio — so it is
+// deliberately outcome-agnostic. Added 2026-06 after the US ratio hit ~1.7%.
+// ============================================================================
+async function _countDisputes(client, gte, lt) {
+  let count = 0, lost = 0, starting_after;
+  do {
+    const params = { limit: 100, created: { gte, lt } };
+    if (starting_after) params.starting_after = starting_after;
+    const res = await client.disputes.list(params);
+    count += res.data.length;
+    lost += res.data.filter((d) => d.status === 'lost').length;
+    starting_after = res.has_more ? res.data[res.data.length - 1].id : null;
+  } while (starting_after);
+  return { count, lost };
+}
+
+async function _countPaidCharges(client, gte, lt) {
+  let count = 0, starting_after, pages = 0;
+  do {
+    const params = { limit: 100, created: { gte, lt } };
+    if (starting_after) params.starting_after = starting_after;
+    const res = await client.charges.list(params);
+    count += res.data.filter((c) => c.paid && c.status === 'succeeded').length;
+    starting_after = res.has_more ? res.data[res.data.length - 1].id : null;
+    if (++pages > 300) break; // safety cap (~30k charges) — far above current volume
+  } while (starting_after);
+  return count;
+}
+
+async function _ratioForWindow(client, gte, lt) {
+  const [d, paidCharges] = await Promise.all([
+    _countDisputes(client, gte, lt),
+    _countPaidCharges(client, gte, lt),
+  ]);
+  const ratio = paidCharges ? (d.count / paidCharges) * 100 : 0;
+  return { disputes: d.count, lost: d.lost, paidCharges, ratio };
+}
+
+const _MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+// Returns the report for the most-recently-completed calendar month (the month
+// before `now`), with the prior month included for the trend, both accounts.
+export async function getDisputeRatioReport(now = new Date()) {
+  const y = now.getUTCFullYear(), m = now.getUTCMonth();
+  const reportStart = Math.floor(Date.UTC(y, m - 1, 1) / 1000);
+  const reportEnd = Math.floor(Date.UTC(y, m, 1) / 1000);
+  const priorStart = Math.floor(Date.UTC(y, m - 2, 1) / 1000);
+  const rm = new Date(reportStart * 1000);
+  const periodLabel = `${_MONTHS[rm.getUTCMonth()]} ${rm.getUTCFullYear()}`;
+
+  const defs = [
+    { name: 'US', flag: '🇺🇸', client: process.env.STRIPE_SECRET_KEY_US ? getStripeUs() : null },
+    { name: 'UK', flag: '🇬🇧', client: process.env.STRIPE_SECRET_KEY ? getStripeUk() : null },
+  ];
+  const accounts = [];
+  for (const def of defs) {
+    if (!def.client) continue;
+    const cur = await _ratioForWindow(def.client, reportStart, reportEnd);
+    const prev = await _ratioForWindow(def.client, priorStart, reportStart);
+    accounts.push({ name: def.name, flag: def.flag, ...cur, priorRatio: prev.ratio });
+  }
+  return { periodLabel, accounts };
+}
+
 // Fetch a charge from whichever account owns it. Tries UK first; on
 // resource_missing / 404, retries against US. Returns { charge, account }.
 // Throws on any other Stripe error.

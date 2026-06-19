@@ -4,7 +4,8 @@ import express from 'express';
 import pkg from '@slack/bolt';
 const { App, ExpressReceiver } = pkg;
 import { stripe as getStripe } from './integrations/stripe.js';
-import { submitEvidence, getPaymentAuthForDispute } from './integrations/stripe.js';
+import { submitEvidence, getPaymentAuthForDispute, getDisputeRatioReport } from './integrations/stripe.js';
+import { postDisputeRatioReport } from './integrations/slack.js';
 import { investigateDispute, analyseDispute } from './agent/index.js';
 import {
   analyseExhibits,
@@ -850,6 +851,23 @@ async function handleDisputeClosed(dispute) {
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Monthly dispute-ratio report — hit by cron-job.org on the 1st of each month.
+// Posts the prior calendar month's US/UK dispute ratio to #stripe-disputes.
+// Optional shared-secret guard: if REPORT_CRON_KEY is set, require ?key=<value>.
+app.get('/reports/dispute-ratio', async (req, res) => {
+  if (process.env.REPORT_CRON_KEY && req.query.key !== process.env.REPORT_CRON_KEY) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  res.json({ status: 'generating' }); // respond fast; compute + post async (~10s)
+  try {
+    const report = await getDisputeRatioReport();
+    await postDisputeRatioReport(report);
+    console.log(`[dispute-ratio] posted report for ${report.periodLabel}`);
+  } catch (err) {
+    console.error('[dispute-ratio] failed:', err.message);
+  }
 });
 
 // Test endpoint — triggers investigation with a known booking

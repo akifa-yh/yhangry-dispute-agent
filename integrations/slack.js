@@ -548,6 +548,79 @@ export async function updateDisputeReviewByCoords({
   console.log(`[slack] Updated dispute review for ${dispute.id} via coords (${channelId}/${messageTs})`);
 }
 
+// ============================================================================
+// Monthly dispute-ratio report. Benchmarks are reference points only — networks
+// revise thresholds (Visa is moving VDMP→VAMP). Data: getDisputeRatioReport()
+// in integrations/stripe.js.
+// ============================================================================
+function ratioStatus(ratio, disputes) {
+  if (ratio >= 1.5) {
+    return { emoji: ':red_circle:', note: "At/above Mastercard's excessive level (~1.5%) and well past Visa's 0.90% line — monitoring-program risk." };
+  }
+  if (ratio >= 0.9) {
+    return disputes >= 100
+      ? { emoji: ':rotating_light:', note: "Above Visa's 0.90% line *and* past the ~100-dispute/mo trigger — real monitoring-program risk. Act." }
+      : { emoji: ':rotating_light:', note: `Above Visa's 0.90% line. The low dispute count (${disputes} vs the ~100/mo trigger) is the only thing keeping us out of formal monitoring — that buffer shrinks as volume grows.` };
+  }
+  if (ratio >= 0.65) {
+    return { emoji: ':large_yellow_circle:', note: "In Visa's early-warning band (0.65–0.90%) — watch closely." };
+  }
+  return { emoji: ':white_check_mark:', note: 'Healthy — below all thresholds.' };
+}
+
+function ratioTrend(cur, prior) {
+  if (Math.abs(cur - prior) < 0.005) return `▬ flat vs ${prior.toFixed(2)}% last month`;
+  return cur > prior ? `▲ up from ${prior.toFixed(2)}% last month` : `▼ down from ${prior.toFixed(2)}% last month`;
+}
+
+export async function postDisputeRatioReport(report) {
+  const blocks = [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `:bar_chart: *Monthly Dispute Ratio — ${report.periodLabel}*\n_Disputes filed ÷ paid charges, per Stripe account._` },
+    },
+  ];
+  for (const a of report.accounts) {
+    const st = ratioStatus(a.ratio, a.disputes);
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `${a.flag} *${a.name} — ${a.ratio.toFixed(2)}%* ${st.emoji}\n\`${a.disputes} disputes / ${a.paidCharges.toLocaleString('en-US')} paid charges\` · ${ratioTrend(a.ratio, a.priorRatio)}\n_${st.note}_`,
+      },
+    });
+  }
+  blocks.push({ type: 'divider' });
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text:
+        '*:straight_ruler: Benchmarks* _(monthly dispute ratio)_\n' +
+        ':white_check_mark: Healthy — under *0.65%*\n' +
+        ':large_yellow_circle: Caution / Visa early-warning — *0.65–0.90%*\n' +
+        ':large_orange_circle: Visa monitoring (VDMP) — *0.90%+* _and_ 100+ disputes/mo\n' +
+        ':red_circle: Mastercard excessive — *~1.5%*\n' +
+        ':bulb: Stripe comfort zone — under *0.75%*\n' +
+        '_Reference points only; Visa is moving VDMP→VAMP and thresholds change — verify current rules._',
+    },
+  });
+  blocks.push({
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text: ":information_source: A dispute counts the moment it's filed — winning or accepting it doesn't lower this ratio. Only *prevention* (provable delivery, expectation-setting) or *pre-chargeback deflection* (Verifi/Ethoca) brings it down.",
+      },
+    ],
+  });
+  await web().chat.postMessage({
+    channel: channelId(),
+    text: `Monthly Dispute Ratio — ${report.periodLabel}`,
+    blocks,
+  });
+}
+
 export async function postError(text, metadata = {}) {
   const metaStr = Object.entries(metadata)
     .map(([k, v]) => `${k}: ${v}`)
