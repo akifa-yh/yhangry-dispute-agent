@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { DateTime } from 'luxon';
 import * as bigquery from '../integrations/bigquery.js';
-import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount, getPaymentAuthForDispute } from '../integrations/stripe.js';
+import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount, getPaymentAuthForDispute, getPriorDisputesForPayment } from '../integrations/stripe.js';
 import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
@@ -345,6 +345,28 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.error('[agent] FX signature computation failed (non-fatal):', err.message);
   }
 
+  // Step 5f: Detect OTHER disputes on this same payment. A charge can be
+  // disputed more than once under different reason codes, so the agent must
+  // treat each independently and never reuse a prior dispute's admission or
+  // evidence. (Khushbu Aggarwal: a won 13.x dispute followed by a C02
+  // 'credit not processed' re-dispute on the same payment, 2026-06.) The list
+  // also lets the prompt time-scope customer admissions and cite a prior won
+  // dispute as a duplicate signal. Non-fatal → [].
+  let priorDisputes = [];
+  try {
+    priorDisputes = await getPriorDisputesForPayment(dispute);
+    if (priorDisputes.length) {
+      console.log(
+        `[agent] ${priorDisputes.length} prior dispute(s) on this payment: ` +
+          priorDisputes
+            .map((d) => `${d.id}(${d.network_reason_code || d.reason || '?'}/${d.status || '?'})`)
+            .join(', ')
+      );
+    }
+  } catch (err) {
+    console.error('[agent] Prior-dispute lookup failed (non-fatal):', err.message);
+  }
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -361,6 +383,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     narrative,
     matrixEntry,
     disputeCreatedIso,
+    priorDisputes,
     isPreEvent,
     daysUntilEvent,
     gmailMessages,

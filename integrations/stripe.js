@@ -160,6 +160,46 @@ export async function fetchDisputeFromEitherAccount(disputeId) {
 }
 
 /**
+ * Find OTHER disputes on the same payment (charge). A single charge can be
+ * disputed more than once — e.g. a cardholder who loses or withdraws one
+ * dispute then re-files under a different reason code. The agent needs to know
+ * about siblings so it treats each dispute independently and never reuses a
+ * prior dispute's admission/evidence (Khushbu Aggarwal: a won 13.x dispute
+ * followed by a C02 'credit not processed' re-dispute on the same payment,
+ * du_1Te5Qq..., 2026-06).
+ *
+ * Returns prior disputes sorted oldest-first, each as
+ * { id, reason, network_reason_code, status, amount_cents, currency,
+ *   created_iso }. Non-fatal: returns [] on any error or when the charge
+ * can't be resolved.
+ */
+export async function getPriorDisputesForPayment(dispute) {
+  try {
+    const chargeId =
+      typeof dispute?.charge === 'string' ? dispute.charge : dispute?.charge?.id;
+    if (!chargeId) return [];
+    const { account } = await fetchChargeFromEitherAccount(chargeId);
+    const client = account === 'us' ? getStripeUs() : getStripeUk();
+    const res = await client.disputes.list({ charge: chargeId, limit: 100 });
+    return (res.data || [])
+      .filter((d) => d.id !== dispute.id)
+      .map((d) => ({
+        id: d.id,
+        reason: d.reason || null,
+        network_reason_code: d.network_reason_code || null,
+        status: d.status || null,
+        amount_cents: d.amount,
+        currency: d.currency,
+        created_iso: d.created ? new Date(d.created * 1000).toISOString() : null,
+      }))
+      .sort((a, b) => new Date(a.created_iso || 0) - new Date(b.created_iso || 0));
+  } catch (err) {
+    console.warn(`[stripe] getPriorDisputesForPayment failed: ${err.message}`);
+    return [];
+  }
+}
+
+/**
  * Derive a dispute's actual financial outcome from the Stripe API, separate
  * from the dispute.status label.
  *
