@@ -13,7 +13,7 @@
  * - yhangry's own historical loss patterns (Tyler retro, prior cases)
  *
  * STRUCTURE — each entry has:
- *   network          'visa' | 'mastercard'
+ *   network          'visa' | 'mastercard' | 'amex'
  *   reason_code      string — the network's code (e.g. '13.3', '4853')
  *   label            short human-readable name
  *   description      one-paragraph plain-English explanation
@@ -43,6 +43,8 @@
  *   payment_receipt                   (receipt/charge record in merchant currency)
  *   currency_disclosure_at_checkout   (proof customer saw merchant-currency price pre-payment)
  *   customer_admission                (written cardholder admission the dispute was filed in error)
+ *   credit_voucher_record             (platform voucher / account-credit record showing a promised credit is live + unredeemed)
+ *   customer_agreed_remedy            (cardholder's written acceptance of a specific remedy, e.g. account credit in lieu of a card refund)
  *
  * CHANGE LOG — keep updated when entries are revised:
  *   2026-04-29 — initial seed (Visa 10.4/13.1/13.3/13.5/13.6/13.7 +
@@ -62,6 +64,14 @@
  *                irrelevant for a currency-conversion dispute. New
  *                canonical types: payment_receipt,
  *                currency_disclosure_at_checkout, customer_admission.
+ *   2026-06-24 — added American Express codes (C02 credit-not-processed,
+ *                C08 not-received, C31 not-as-described, C05 cancelled,
+ *                F29 card-not-present fraud) + amex network inference in
+ *                lookupMatrixEntry. Khushbu Aggarwal C02 (2026-06) fell back
+ *                to general rules because no Amex entry existed. New canonical
+ *                types: credit_voucher_record, customer_agreed_remedy. C02
+ *                encodes the "credit WAS processed + customer agreed to the
+ *                remedy" win path (the Khushbu double-dip re-dispute lesson).
  */
 
 // ============================================================================
@@ -693,6 +703,217 @@ const mc_4863 = {
 };
 
 // ============================================================================
+// AMERICAN EXPRESS CODES
+// ============================================================================
+// Amex uses letter-prefixed codes (C##, F##). Stripe surfaces them in
+// dispute.network_reason_code (e.g. 'C02') and maps them to a normalised
+// dispute.reason (e.g. 'credit_not_processed'). Amex is its own issuer so
+// cases can resolve faster, but the evidence bar is the same. yhangry sees
+// Amex disputes mostly on US bookings (Amex US consumer cards).
+
+const amex_C02 = {
+  network: 'amex',
+  reason_code: 'C02',
+  label: 'Credit Not Processed',
+  description:
+    "Amex equivalent of Visa 13.6 / Mastercard 4860 — the cardholder claims a promised credit/refund was never processed. yhangry-specific trap: this frequently follows GOODWILL (a refund and/or account credit) issued AFTER an earlier dispute on the same payment was won. The win path is to show the credit WAS processed AND that the cardholder agreed to that specific remedy — not to re-argue the original service complaint.",
+
+  common_claims: [
+    'credit_promised_but_not_received',
+    'partial_refund_disputed',
+    'goodwill_credit_not_applied',
+    'refund_expected_to_card_received_as_account_credit',
+  ],
+
+  required_evidence: [
+    'customer_agreed_remedy', // the cardholder accepted this remedy in writing
+    'credit_voucher_record', // the credit/voucher exists, is live + unredeemed
+    'refund_processed_proof', // any cash refund actually hit the card
+  ],
+
+  strengthening_evidence: [
+    'payment_receipt',
+    'service_delivery_proof',
+    'customer_admission',
+  ],
+
+  yhangry_evidence_sources: {
+    customer_agreed_remedy:
+      "Gmail correspondence (info@yhangry.com inbox) where the cardholder accepts the remedy in writing — e.g. 'Please process a $50 credit to yhangry that doesn't expire and refund the 4% fee also.' STRONGEST evidence for C02: it shows the customer chose the account credit over a card refund. Lead with it.",
+    credit_voucher_record:
+      'yhangry admin voucher / account-credit record (Nova) showing the goodwill credit is LIVE, UNREDEEMED, and assigned to this customer (e.g. voucher code KHU50AGG, value $50, redeemed=false). MUST be live at submission — never revoke the credit mid-dispute, as that makes the "credit not processed" claim literally true.',
+    refund_processed_proof:
+      "Stripe refund record + the receipt emailed to the customer, plus the Stripe payment activity log entry ('Successfully refunded $X due to customer request'). Stripe's own log is higher-independence than yhangry's confirmation email.",
+    payment_receipt:
+      'Stripe charge + refund receipt showing the amounts and the card refunded (e.g. AmEx ...1003).',
+    service_delivery_proof:
+      'chef_submitted_payment_survey + day-of comms — establishes the core service was delivered and only a complimentary/ancillary item was ever in question.',
+    customer_admission:
+      'Any cardholder email acknowledging the credit was received/agreed. NOTE: an admission about an EARLIER dispute on this payment does NOT count for this one — see the prompt\'s admission time-scope rule.',
+  },
+
+  notes:
+    'Khushbu Aggarwal 2026-06 is the canonical C02 for yhangry: won a $50 13.x dispute, was given goodwill ($20 card refund + $50 non-expiring account credit she agreed to in writing), then re-disputed the same $50 as C02 to double-dip. RULES FOR C02: (1) LEAD with customer_agreed_remedy + credit_voucher_record + refund_processed_proof — prove the credit was processed and accepted. (2) Do NOT lead with the prior dispute\'s withdrawal admission — that pertained to the earlier dispute (see PRIOR DISPUTES + admission time-scope handling). (3) If a prior dispute on this payment was WON, cite it as a duplicate / second-bite signal. (4) Keep the credit live through resolution.',
+};
+
+const amex_C08 = {
+  network: 'amex',
+  reason_code: 'C08',
+  label: 'Goods/Services Not Received or Only Partially Received',
+  description:
+    "Amex analogue of Visa 13.1 / Mastercard 4855 — cardholder claims the goods or services were not received. For yhangry: 'the chef never showed up' / 'the booking date passed and nothing happened'. Strongest counter is hard proof of chef attendance and service delivery.",
+
+  common_claims: [
+    'chef_did_not_attend',
+    'service_never_rendered',
+    'no_show',
+    'event_date_passed_without_service',
+  ],
+
+  required_evidence: [
+    'chef_attendance_proof',
+    'chef_arrival_communication',
+  ],
+
+  strengthening_evidence: [
+    'service_delivery_proof',
+    'post_event_customer_acknowledgment',
+    'agreed_service_description',
+  ],
+
+  yhangry_evidence_sources: {
+    chef_attendance_proof:
+      'chef_submitted_payment_survey = true is the STRONGEST signal (chef can only complete it after the job). Also is_chef_ready_response / is_chef_on_time_response.',
+    chef_arrival_communication: 'Day-of platform messages from chef (ETA, "arrived").',
+    service_delivery_proof: 'See Visa 13.1 caveats — chef payout photos are often weak.',
+    post_event_customer_acknowledgment: 'Customer post-event messages, reviews.',
+    agreed_service_description: 'Pre-event platform messages.',
+  },
+
+  notes:
+    'Same playbook as Visa 13.1. Winnable when chef_submitted_payment_survey = true; escalate where the chef genuinely flaked (no survey, no day-of comms).',
+};
+
+const amex_C31 = {
+  network: 'amex',
+  reason_code: 'C31',
+  label: 'Goods/Services Not as Described',
+  description:
+    "Amex analogue of Visa 13.3 — cardholder claims the goods/services received did not match the description (missing courses, substitutions, chef left early, quality complaints). yhangry's most common substantive complaint category; the Tyler lessons apply.",
+
+  common_claims: [
+    'courses_not_served',
+    'menu_items_substituted_without_consent',
+    'chef_left_early',
+    'service_below_advertised_quality',
+    'incomplete_service',
+  ],
+
+  required_evidence: [
+    'agreed_service_description',
+    'click_to_accept_timestamp',
+    'chef_attendance_proof',
+    'service_delivery_proof',
+  ],
+
+  strengthening_evidence: [
+    'substitution_consent',
+    'post_event_customer_acknowledgment',
+    'chef_arrival_communication',
+    'cancellation_policy_disclosure',
+  ],
+
+  yhangry_evidence_sources: {
+    agreed_service_description: 'Pre-event platform messages where the menu was proposed and accepted.',
+    click_to_accept_timestamp:
+      'Per-user timestamp not yet captured — the agent auto-embeds the checkout terms-acceptance screenshot (assets/checkout-terms-acceptance.jpeg), same as Visa 13.3.',
+    chef_attendance_proof: 'chef_submitted_payment_survey + day-of comms.',
+    service_delivery_proof: 'Same caveats as Visa 13.3 — treat generic chef payout photos as suspect.',
+    substitution_consent: 'Same gap as 13.3 — chef-side substitution admissions are NEGATIVE evidence (own-goal).',
+    post_event_customer_acknowledgment: 'Customer post-event messages, reviews.',
+    chef_arrival_communication: 'Day-of platform messages from chef.',
+    cancellation_policy_disclosure: 'yhangry.com/booking-terms',
+  },
+
+  notes:
+    'Same playbook as Visa 13.3 (the Tyler code). Include the checkout terms-acceptance screenshot by default; route any chef-admitted substitution/early-leave to evidence_weaknesses, not evidence_to_include.',
+};
+
+const amex_C05 = {
+  network: 'amex',
+  reason_code: 'C05',
+  label: 'Goods/Services Cancelled',
+  description:
+    "Amex analogue of Visa 13.7 — cardholder claims they cancelled the booking but were charged anyway, or charged after cancellation. Counter by showing the booking was not actually cancelled, or that the cancellation fell after the no-refund deadline per the agreed T&Cs.",
+
+  common_claims: [
+    'cancelled_but_charged',
+    'cancellation_acknowledged_but_charge_remained',
+  ],
+
+  required_evidence: [
+    'cancellation_policy_disclosure',
+    'cancellation_timing_record',
+    'click_to_accept_timestamp',
+  ],
+
+  strengthening_evidence: [
+    'agreed_service_description',
+    'chef_attendance_proof',
+  ],
+
+  yhangry_evidence_sources: {
+    cancellation_policy_disclosure: 'yhangry.com/booking-terms',
+    cancellation_timing_record:
+      "Booking cancellation timestamp + the customer's cancellation message/email timestamp + the event date (to compute days-before-event).",
+    click_to_accept_timestamp: 'Same gap as Visa 13.3 — embed the checkout terms-acceptance screenshot.',
+    agreed_service_description: 'Pre-event messages.',
+    chef_attendance_proof: 'chef_submitted_payment_survey — proves the booking was honoured despite the alleged cancellation.',
+  },
+
+  notes:
+    'Same playbook as Visa 13.7. Lead with the cancellation timestamp falling inside the no-refund window + the agreed cancellation policy.',
+};
+
+const amex_F29 = {
+  network: 'amex',
+  reason_code: 'F29',
+  label: 'Card Not Present (Fraud)',
+  description:
+    "Amex card-not-present fraud code (parity with Visa 10.4 / Mastercard 4837) — cardholder claims they did not authorise the card-absent transaction. To win, show the legitimate cardholder initiated and authorised the booking, i.e. it wasn't fraud at all.",
+
+  common_claims: [
+    'transaction_not_authorised',
+    'card_used_without_permission',
+    'no_knowledge_of_booking',
+  ],
+
+  required_evidence: [
+    'transaction_authorization_proof',
+    'customer_initiated_booking_proof',
+  ],
+
+  strengthening_evidence: [
+    'agreed_service_description',
+    'post_event_customer_acknowledgment',
+    'chef_attendance_proof',
+  ],
+
+  yhangry_evidence_sources: {
+    transaction_authorization_proof:
+      'Stripe charge object — AVS / CVV checks (extractPaymentAuth surfaces these to the agent for the payment-authentication exhibit).',
+    customer_initiated_booking_proof:
+      "Customer-sent platform messages negotiating menu/details — a fraudster doesn't negotiate over days.",
+    agreed_service_description: 'Pre-event platform messages.',
+    post_event_customer_acknowledgment: 'Post-event messages, reviews.',
+    chef_attendance_proof: 'chef_submitted_payment_survey + arrival comms (service delivered to the address).',
+  },
+
+  notes:
+    "Same playbook as Visa 10.4. yhangry DOES surface AVS/CVV via extractPaymentAuth — when CVC + postcode passed, that's the strongest single rebuttal to an 'unauthorised' claim. Pair with the customer's own platform engagement.",
+};
+
+// ============================================================================
 // EXPORT
 // ============================================================================
 
@@ -712,6 +933,11 @@ export const EVIDENCE_MATRIX = [
   mc_4855,
   mc_4860,
   mc_4863,
+  amex_C02,
+  amex_C08,
+  amex_C31,
+  amex_C05,
+  amex_F29,
 ];
 
 /**
@@ -720,18 +946,22 @@ export const EVIDENCE_MATRIX = [
  * have a playbook for yet" case (probably ESCALATE + flag for ops review).
  *
  * Network is inferred from reason_code prefix when not explicitly provided:
- *   '13.x' / '10.x' → visa
+ *   '13.x' / '10.x' / '12.x' → visa
  *   '4xxx' → mastercard
+ *   'C##' / 'F##' (letter + two digits) → amex
  */
 export function lookupMatrixEntry({ network, reason_code }) {
   if (!reason_code) return null;
 
   const code = String(reason_code).trim();
   let inferredNetwork = (network || '').toLowerCase();
+  // Normalise common network synonyms (Stripe/Amex spellings → 'amex').
+  if (/amex|american|express/.test(inferredNetwork)) inferredNetwork = 'amex';
 
   if (!inferredNetwork) {
     if (/^\d{2}\.\d/.test(code)) inferredNetwork = 'visa';
     else if (/^4\d{3}$/.test(code)) inferredNetwork = 'mastercard';
+    else if (/^[A-Z]\d{2}$/.test(code)) inferredNetwork = 'amex'; // Amex C##/F## (e.g. C02, F29)
   }
 
   return (
