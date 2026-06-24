@@ -941,34 +941,73 @@ export const EVIDENCE_MATRIX = [
 ];
 
 /**
- * Look up the matrix entry for a (network, reason_code) pair.
- * Returns null if no entry exists — caller should handle the "code we don't
- * have a playbook for yet" case (probably ESCALATE + flag for ops review).
- *
- * Network is inferred from reason_code prefix when not explicitly provided:
- *   '13.x' / '10.x' / '12.x' → visa
- *   '4xxx' → mastercard
- *   'C##' / 'F##' (letter + two digits) → amex
+ * Stripe's normalised dispute.reason → the per-network reason_code. Used as a
+ * fallback when a dispute has no network_reason_code — common on raw disputes
+ * before a VROL upload (the dashboard shows e.g. C02 but the API
+ * `network_reason_code` field comes back empty). The network is taken from the
+ * card brand on the charge. Khushbu Aggarwal C02: the dispute carried
+ * reason='credit_not_processed' + an amex card but no network_reason_code, so
+ * the playbook missed on the first pass until this fallback was added.
  */
-export function lookupMatrixEntry({ network, reason_code }) {
-  if (!reason_code) return null;
+const STRIPE_REASON_TO_CODE = {
+  credit_not_processed: { visa: '13.6', mastercard: '4860', amex: 'C02' },
+  product_not_received: { visa: '13.1', mastercard: '4855', amex: 'C08' },
+  product_unacceptable: { visa: '13.3', mastercard: '4853', amex: 'C31' },
+  subscription_canceled: { visa: '13.7', amex: 'C05' },
+  fraudulent: { visa: '10.4', mastercard: '4837', amex: 'F29' },
+  unrecognized: { visa: '10.4', mastercard: '4863', amex: 'F29' },
+  duplicate: { visa: '12.6.1' },
+};
 
-  const code = String(reason_code).trim();
-  let inferredNetwork = (network || '').toLowerCase();
-  // Normalise common network synonyms (Stripe/Amex spellings → 'amex').
-  if (/amex|american|express/.test(inferredNetwork)) inferredNetwork = 'amex';
+function normaliseNetwork(s) {
+  const v = String(s || '').toLowerCase();
+  if (/amex|american|express/.test(v)) return 'amex';
+  if (/visa/.test(v)) return 'visa';
+  if (/master/.test(v)) return 'mastercard';
+  return '';
+}
 
-  if (!inferredNetwork) {
-    if (/^\d{2}\.\d/.test(code)) inferredNetwork = 'visa';
-    else if (/^4\d{3}$/.test(code)) inferredNetwork = 'mastercard';
-    else if (/^[A-Z]\d{2}$/.test(code)) inferredNetwork = 'amex'; // Amex C##/F## (e.g. C02, F29)
+/**
+ * Look up the matrix entry for a dispute.
+ *
+ * Primary path: resolve by network_reason_code. Network is taken from the
+ * explicit `network`, else the `card_brand`, else inferred from the code prefix
+ * ('13.x'/'10.x'/'12.x' → visa, '4xxx' → mastercard, 'C##'/'F##' → amex).
+ *
+ * Fallback path: when there is no usable network_reason_code, map Stripe's
+ * normalised `stripe_reason` to the per-network code using `card_brand` for the
+ * network. Returns null if neither path resolves — caller handles the
+ * "no playbook yet" case (ESCALATE + flag).
+ */
+export function lookupMatrixEntry({ network, reason_code, stripe_reason, card_brand } = {}) {
+  const inferredNetwork = normaliseNetwork(network) || normaliseNetwork(card_brand);
+
+  // Primary — by network reason code.
+  if (reason_code) {
+    const code = String(reason_code).trim();
+    let net = inferredNetwork;
+    if (!net) {
+      if (/^\d{2}\.\d/.test(code)) net = 'visa';
+      else if (/^4\d{3}$/.test(code)) net = 'mastercard';
+      else if (/^[A-Z]\d{2}$/.test(code)) net = 'amex'; // Amex C##/F## (e.g. C02, F29)
+    }
+    const hit = EVIDENCE_MATRIX.find((e) => e.network === net && e.reason_code === code);
+    if (hit) return hit;
   }
 
-  return (
-    EVIDENCE_MATRIX.find(
-      (e) => e.network === inferredNetwork && e.reason_code === code
-    ) || null
-  );
+  // Fallback — by Stripe normalised reason + card brand (no network_reason_code).
+  if (stripe_reason && inferredNetwork) {
+    const code = STRIPE_REASON_TO_CODE[String(stripe_reason).trim()]?.[inferredNetwork];
+    if (code) {
+      return (
+        EVIDENCE_MATRIX.find(
+          (e) => e.network === inferredNetwork && e.reason_code === code
+        ) || null
+      );
+    }
+  }
+
+  return null;
 }
 
 /**

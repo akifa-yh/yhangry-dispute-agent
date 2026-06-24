@@ -272,14 +272,25 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.warn('[agent] Chef Gmail fetch failed (non-fatal):', err.message);
   }
 
+  // Step 5a'': Payment-authentication summary (card brand + CVC/AVS) from the
+  // dispute's charge. Fetched here — before the playbook lookup — so the card
+  // brand can drive the matrix's Stripe-reason fallback when the dispute has no
+  // network_reason_code (common pre-VROL). Reused later for the payment-auth
+  // exhibit. Non-fatal → null.
+  const paymentAuth = await getPaymentAuthForDispute(dispute);
+
   // Step 5b: Look up the evidence requirements playbook for this dispute's
   // (network, reason_code) pair. The matrix tells us which evidence types
   // win at the bank for this code so the agent can do a "what we have vs
-  // what we'd need" check. Returns null if we don't have a playbook for
-  // this code yet — Gemini handles that case gracefully (see prompt.js).
+  // what we'd need" check. When network_reason_code is missing (common on raw
+  // disputes pre-VROL), it falls back to Stripe's normalised reason + the card
+  // brand. Returns null if we don't have a playbook yet — Gemini handles that
+  // gracefully (see prompt.js).
   const matrixEntry = lookupMatrixEntry({
-    network: undefined, // inferred from reason_code prefix
+    network: undefined, // inferred from reason_code prefix, else card brand
     reason_code: dispute.network_reason_code,
+    stripe_reason: dispute.reason,
+    card_brand: paymentAuth?.brand,
   });
   if (matrixEntry) {
     console.log(
@@ -477,10 +488,8 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.error('[agent] Product gap tracking failed (non-fatal):', err.message);
   }
 
-  // Payment-authentication summary (for the auto payment-auth exhibit). Pulled
-  // from the dispute's charge; non-fatal (null on any failure). The PDF only
-  // surfaces it when CVC passed and the case is recognition-relevant.
-  const paymentAuth = await getPaymentAuthForDispute(dispute);
+  // (paymentAuth was fetched earlier — before the playbook lookup — so the card
+  // brand could drive the matrix's Stripe-reason fallback. Reused here.)
 
   // Return the (hydrated) dispute too — it carries currency, charge, etc. that
   // the stripped button/modal payload lacks, so the PDF can render the right
