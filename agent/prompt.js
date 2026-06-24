@@ -716,6 +716,21 @@ You may extract customer_admission_evidence from EITHER of these sources
       admission) can be excluded from the fetched set even when they
       exist. Ops compensates by quoting them in the narrative.
 
+CRITICAL — THE ADMISSION MUST BELONG TO *THIS* DISPUTE:
+A payment can be disputed more than once (see PRIOR DISPUTES ON THIS
+PAYMENT in the user message). An admission is only valid for the CURRENT
+dispute if it plausibly refers to it:
+  - The admission email must be dated ON OR AFTER this dispute's filing
+    date (see "Dispute filed (created)" in PRE-EVENT CONTEXT), OR it must
+    explicitly reference this dispute. An admission dated BEFORE this
+    dispute was created pertains to an EARLIER dispute and MUST NOT be
+    treated as an admission here — set customer_admission_detected: false
+    and do not let it override strategy.
+  - Example: the cardholder emails "I have cancelled the dispute" on
+    30 Apr; a NEW dispute is then filed on 3 Jun. The 30 Apr line is about
+    the FIRST (already-resolved) dispute — it is NOT an admission for the
+    3 Jun dispute. (Khushbu Aggarwal, 2026-06.)
+
 When you detect an admission via (a) or (b):
   1. Set customer_admission_detected: true
   2. Quote the exact admission text (1-2 sentences max, verbatim) into
@@ -733,6 +748,21 @@ If no admission is present under EITHER (a) or (b), set
 customer_admission_detected: false and leave customer_admission_evidence
 empty/null. Do NOT fabricate admissions or paraphrase yhangry's own
 statements as cardholder words.
+
+MULTIPLE DISPUTES ON ONE PAYMENT:
+The user message may include a PRIOR DISPUTES ON THIS PAYMENT section. A
+single payment can be disputed more than once, often under DIFFERENT
+reason codes (e.g. a cardholder loses or withdraws a "services not
+received" dispute, then re-files as "credit not processed"). When prior
+disputes exist:
+  - Treat THIS dispute strictly on its OWN reason code + narrative. Use
+    the EVIDENCE REQUIREMENTS PLAYBOOK for the CURRENT code, not the prior
+    one.
+  - Do NOT reuse the prior dispute's claims, admission, or evidence as if
+    they answer this one (see the admission time-scope rule above).
+  - If a prior dispute on this payment was WON or withdrawn, you MAY cite
+    that as a duplicate / second-bite signal in reasoning and flags — but
+    the substantive rebuttal must still come from this code's playbook.
 
 PRE-EVENT DISPUTE HANDLING:
 The user message includes a PRE-EVENT CONTEXT block stating whether the
@@ -1011,6 +1041,7 @@ export function buildUserMessage({
   narrative,
   matrixEntry,
   disputeCreatedIso,
+  priorDisputes = [],
   isPreEvent,
   daysUntilEvent,
   gmailMessages,
@@ -1092,6 +1123,18 @@ export function buildUserMessage({
   const playbookSection = formatRequirements(matrixEntry);
   const stolenCardSection = formatFraudSignature(fraudSignature);
   const fxDisputeSection = formatFxSignature(fxSignature);
+  const priorDisputesSection =
+    Array.isArray(priorDisputes) && priorDisputes.length > 0
+      ? priorDisputes
+          .map(
+            (d) =>
+              `- ${d.id} | ${d.network_reason_code || d.reason || 'unknown reason'} | status: ${d.status || 'unknown'} | filed: ${d.created_iso || 'unknown'}` +
+              (d.amount_cents != null
+                ? ` | amount: ${(d.amount_cents / 100).toFixed(2)} ${(d.currency || '').toUpperCase()}`
+                : '')
+          )
+          .join('\n')
+      : 'None — this is the only dispute on this payment.';
 
   return `DISPUTE DETAILS:
 - Dispute ID: ${dispute.id}
@@ -1116,6 +1159,9 @@ PRE-EVENT CONTEXT:
 - Event date: ${booking.event_date}
 - Days until event (from dispute filing): ${daysUntilEvent != null ? daysUntilEvent : 'unknown'}
 - is_pre_event: ${isPreEvent ? 'TRUE — apply PRE-EVENT DISPUTE HANDLING rules above (use PRE_EVENT_CONTACT strategy and CUSTOMER_CONTACT_FIRST recommendation unless this is a fraud code)' : 'FALSE — proceed with standard rebuttal logic'}
+
+PRIOR DISPUTES ON THIS PAYMENT (same charge — may be under different reason codes; apply MULTIPLE DISPUTES ON ONE PAYMENT rules):
+${priorDisputesSection}
 
 DEADLINE:
 - Customer timezone: ${timezone}
