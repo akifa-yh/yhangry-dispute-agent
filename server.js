@@ -42,15 +42,36 @@ async function reportInvestigationError(source, dispute, err) {
       ? `$${(dispute.amount / 100).toFixed(2)}`
       : 'unknown';
     const reason = dispute?.network_reason_code || dispute?.reason || 'unknown';
-    const trimmedMsg = (err?.message || String(err)).slice(0, 800);
+
+    // Always strip HTML and collapse whitespace so a raw error page (e.g. a
+    // Google "robot" 403) can never be dumped into Slack as gibberish again.
+    const rawMsg = err?.message || String(err);
+    const cleanMsg = rawMsg.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Recognise Google's edge anti-abuse block: a valid credential still gets a
+    // 403 "robot" HTML page when the server's outbound IP has been flagged.
+    // On Render's free tier the outbound IP is shared and rotates per deploy,
+    // so the fix is simply to redeploy onto a fresh IP — NOT a credential issue.
+    const isGoogleIpBlock =
+      /Error 403 \(Forbidden\)|images\/errors\/robot\.png/.test(rawMsg) &&
+      /Forbidden/i.test(rawMsg);
+
+    const errorText = isGoogleIpBlock
+      ? "Google blocked this server's outbound IP (403 robot page) — NOT a credentials problem. " +
+        'On Render free tier the outbound IP is shared and rotates per deploy; one was flagged by Google. ' +
+        'FIX: redeploy the service (Manual Deploy → latest commit) to roll onto a fresh IP.'
+      : cleanMsg.slice(0, 800);
+
     await postSlackError(
-      `Investigation failed before posting recommendation`,
+      isGoogleIpBlock
+        ? 'Investigation failed — Google IP block (redeploy to fix)'
+        : `Investigation failed before posting recommendation`,
       {
         source,
         dispute_id: dispute?.id || 'unknown',
         amount,
         reason,
-        error: trimmedMsg,
+        error: errorText,
       }
     );
   } catch (slackErr) {
@@ -851,96 +872,6 @@ async function handleDisputeClosed(dispute) {
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// TEMP diagnostic — reports which BigQuery credential source the running
-// process resolves, the service-account identity (no secret material), and a
-// live BigQuery ping result. Remove once the credential issue is resolved.
-app.get('/debug/creds', async (req, res) => {
-  const projectId = process.env.BIGQUERY_PROJECT_ID || 'yhangry';
-  const out = { ts: new Date().toISOString(), projectId };
-  const jsonEnv = process.env.BIGQUERY_CREDENTIALS_JSON;
-  out.credentials_json_set = !!jsonEnv;
-  out.credentials_json_len = jsonEnv ? jsonEnv.length : 0;
-  out.keyfile_path_env = process.env.BIGQUERY_KEYFILE_PATH || null;
-
-  let credsForClient = null;
-  if (jsonEnv) {
-    out.resolved_source = 'env_json';
-    try {
-      const c = JSON.parse(jsonEnv);
-      out.env_json_parse_ok = true;
-      out.client_email = c.client_email;
-      out.private_key_id = c.private_key_id;
-      out.private_key_has_newlines = typeof c.private_key === 'string' && c.private_key.includes('\n');
-      credsForClient = c;
-    } catch (e) {
-      out.env_json_parse_ok = false;
-      out.env_json_parse_error = String(e.message).slice(0, 120);
-    }
-  } else {
-    out.resolved_source = 'keyfile';
-    const fs = await import('node:fs');
-    const path = process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json';
-    out.keyfile_resolved_path = path;
-    out.keyfile_exists = fs.existsSync(path);
-    if (out.keyfile_exists) {
-      try {
-        const raw = fs.readFileSync(path, 'utf8');
-        out.keyfile_bytes = raw.length;
-        const c = JSON.parse(raw);
-        out.keyfile_parse_ok = true;
-        out.client_email = c.client_email;
-        out.private_key_id = c.private_key_id;
-        out.private_key_has_newlines = (c.private_key || '').includes('\n');
-      } catch (e) {
-        out.keyfile_parse_ok = false;
-        out.keyfile_parse_error = String(e.message).slice(0, 120);
-      }
-    }
-  }
-
-  try {
-    const { BigQuery } = await import('@google-cloud/bigquery');
-    const opts = { projectId };
-    if (jsonEnv && credsForClient) opts.credentials = credsForClient;
-    else opts.keyFilename = process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json';
-    const bq = new BigQuery(opts);
-    await bq.query({ query: 'SELECT 1 AS ok' });
-    out.bq_ping = 'SUCCESS';
-  } catch (e) {
-    out.bq_ping = 'FAILED';
-    out.bq_error_code = e.code || null;
-    out.bq_error = (e.message || String(e)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
-  }
-
-  // Network-origin probes: is this server's outbound IP itself being blocked
-  // by Google at the edge (independent of any credential)?
-  const probe = async (url, opts = {}) => {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 12000);
-    try {
-      const r = await fetch(url, { signal: ctl.signal, ...opts });
-      const body = await r.text();
-      const isRobotBlock = /Error 403 \(Forbidden\)|images\/errors\/robot\.png/.test(body);
-      return { status: r.status, is_google_robot_block: isRobotBlock, body_snippet: body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) };
-    } catch (e) {
-      return { error: String(e.message || e).slice(0, 120) };
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-
-  try {
-    out.egress_ip = (await probe('https://api.ipify.org')).body_snippet || null;
-  } catch { out.egress_ip = null; }
-  // Unauthenticated hit on a Google API host. Normal response: 401/403 JSON
-  // ("Login Required"). If instead it returns the robot 403 HTML page, the IP
-  // itself is blocked at Google's edge — credentials are irrelevant.
-  out.google_unauth_probe = await probe('https://bigquery.googleapis.com/bigquery/v2/projects/yhangry/datasets');
-  out.google_token_host_probe = await probe('https://oauth2.googleapis.com/');
-
-  res.json(out);
 });
 
 // Monthly dispute-ratio report — hit by cron-job.org on the 1st of each month.
