@@ -621,14 +621,21 @@ export async function postDisputeRatioReport(report) {
   });
 }
 
-export async function postError(text, metadata = {}) {
+export async function postError(text, metadata = {}, nextSteps = null) {
   const metaStr = Object.entries(metadata)
     .map(([k, v]) => `${k}: ${v}`)
     .join(', ');
 
+  // Optional "Next steps" block — a plain-English, can't-miss recovery guide so
+  // whoever sees the error knows exactly what to do without remembering context.
+  const steps = Array.isArray(nextSteps) ? nextSteps : nextSteps ? [nextSteps] : [];
+  const stepsStr = steps.length
+    ? `\n\n:point_right: *Next steps:*\n` + steps.map((s, i) => `${i + 1}. ${s}`).join('\n')
+    : '';
+
   await web().chat.postMessage({
     channel: channelId(),
-    text: `:x: *Error:* ${text}\n${metaStr ? `_${metaStr}_` : ''}`,
+    text: `:x: *Error:* ${text}\n${metaStr ? `_${metaStr}_` : ''}${stepsStr}`,
   });
 }
 

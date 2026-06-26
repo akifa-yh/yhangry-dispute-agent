@@ -57,10 +57,21 @@ async function reportInvestigationError(source, dispute, err) {
       /Forbidden/i.test(rawMsg);
 
     const errorText = isGoogleIpBlock
-      ? "Google blocked this server's outbound IP (403 robot page) — NOT a credentials problem. " +
-        'On Render free tier the outbound IP is shared and rotates per deploy; one was flagged by Google. ' +
-        'FIX: redeploy the service (Manual Deploy → latest commit) to roll onto a fresh IP.'
+      ? "Google blocked this server's outbound IP (403 robot page). This is NOT a credentials problem — Render's free tier shares a rotating outbound IP and one got flagged by Google."
       : cleanMsg.slice(0, 800);
+
+    const nextSteps = isGoogleIpBlock
+      ? [
+          'Open Render → the *yhangry-dispute-agent* service.',
+          'Click *Manual Deploy → Deploy latest commit* (top-right).',
+          'Wait for it to go green/Live — this rolls the server onto a fresh IP.',
+          'Then re-trigger this dispute (it will also process on the next webhook). Nothing to change with keys or GCP.',
+        ]
+      : [
+          'Check this service\'s logs in Render for the full error.',
+          'If it looks transient, redeploy (Manual Deploy → Deploy latest commit) and re-trigger the dispute.',
+          'If it persists, share this message with whoever maintains the agent.',
+        ];
 
     await postSlackError(
       isGoogleIpBlock
@@ -72,7 +83,8 @@ async function reportInvestigationError(source, dispute, err) {
         amount,
         reason,
         error: errorText,
-      }
+      },
+      nextSteps
     );
   } catch (slackErr) {
     console.error(`[${source}] Also failed to post error to Slack:`, slackErr?.message || slackErr);
