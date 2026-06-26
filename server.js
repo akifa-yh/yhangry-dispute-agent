@@ -853,6 +853,70 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// TEMP diagnostic — reports which BigQuery credential source the running
+// process resolves, the service-account identity (no secret material), and a
+// live BigQuery ping result. Remove once the credential issue is resolved.
+app.get('/debug/creds', async (req, res) => {
+  const projectId = process.env.BIGQUERY_PROJECT_ID || 'yhangry';
+  const out = { ts: new Date().toISOString(), projectId };
+  const jsonEnv = process.env.BIGQUERY_CREDENTIALS_JSON;
+  out.credentials_json_set = !!jsonEnv;
+  out.credentials_json_len = jsonEnv ? jsonEnv.length : 0;
+  out.keyfile_path_env = process.env.BIGQUERY_KEYFILE_PATH || null;
+
+  let credsForClient = null;
+  if (jsonEnv) {
+    out.resolved_source = 'env_json';
+    try {
+      const c = JSON.parse(jsonEnv);
+      out.env_json_parse_ok = true;
+      out.client_email = c.client_email;
+      out.private_key_id = c.private_key_id;
+      out.private_key_has_newlines = typeof c.private_key === 'string' && c.private_key.includes('\n');
+      credsForClient = c;
+    } catch (e) {
+      out.env_json_parse_ok = false;
+      out.env_json_parse_error = String(e.message).slice(0, 120);
+    }
+  } else {
+    out.resolved_source = 'keyfile';
+    const fs = await import('node:fs');
+    const path = process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json';
+    out.keyfile_resolved_path = path;
+    out.keyfile_exists = fs.existsSync(path);
+    if (out.keyfile_exists) {
+      try {
+        const raw = fs.readFileSync(path, 'utf8');
+        out.keyfile_bytes = raw.length;
+        const c = JSON.parse(raw);
+        out.keyfile_parse_ok = true;
+        out.client_email = c.client_email;
+        out.private_key_id = c.private_key_id;
+        out.private_key_has_newlines = (c.private_key || '').includes('\n');
+      } catch (e) {
+        out.keyfile_parse_ok = false;
+        out.keyfile_parse_error = String(e.message).slice(0, 120);
+      }
+    }
+  }
+
+  try {
+    const { BigQuery } = await import('@google-cloud/bigquery');
+    const opts = { projectId };
+    if (jsonEnv && credsForClient) opts.credentials = credsForClient;
+    else opts.keyFilename = process.env.BIGQUERY_KEYFILE_PATH || './credentials/bigquery.json';
+    const bq = new BigQuery(opts);
+    await bq.query({ query: 'SELECT 1 AS ok' });
+    out.bq_ping = 'SUCCESS';
+  } catch (e) {
+    out.bq_ping = 'FAILED';
+    out.bq_error_code = e.code || null;
+    out.bq_error = (e.message || String(e)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+  }
+
+  res.json(out);
+});
+
 // Monthly dispute-ratio report — hit by cron-job.org on the 1st of each month.
 // Posts the prior calendar month's US/UK dispute ratio to #stripe-disputes.
 // Optional shared-secret guard: if REPORT_CRON_KEY is set, require ?key=<value>.
