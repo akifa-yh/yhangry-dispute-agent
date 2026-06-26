@@ -60,16 +60,27 @@ async function reportInvestigationError(source, dispute, err) {
       ? "Google blocked this server's outbound IP (403 robot page). This is NOT a credentials problem — Render's free tier shares a rotating outbound IP and one got flagged by Google."
       : cleanMsg.slice(0, 800);
 
+    // The "Retry investigation" button re-runs investigateDispute, so only
+    // attach it to investigation failures (not webhook-closed outcome posts,
+    // where re-investigating a closed dispute would be wrong). Stripe fires
+    // charge.dispute.created only once, so this button is the ONLY self-serve
+    // way to re-run a dispute that failed during an outage.
+    const canRetry = source !== 'webhook-closed' && !!dispute?.id;
+
     const nextSteps = isGoogleIpBlock
       ? [
           'Open Render → the *yhangry-dispute-agent* service.',
           'Click *Manual Deploy → Deploy latest commit* (top-right).',
           'Wait for it to go green/Live — this rolls the server onto a fresh IP.',
-          'Then re-trigger this dispute (it will also process on the next webhook). Nothing to change with keys or GCP.',
+          ...(canRetry
+            ? ['Come back here and click the *🔄 Retry investigation* button below. Nothing to change with keys or GCP.']
+            : ['Nothing to change with keys or GCP — just the redeploy.']),
         ]
       : [
-          'Check this service\'s logs in Render for the full error.',
-          'If it looks transient, redeploy (Manual Deploy → Deploy latest commit) and re-trigger the dispute.',
+          ...(canRetry
+            ? ['If it looks transient, click the *🔄 Retry investigation* button below.']
+            : []),
+          "Check this service's logs in Render for the full error.",
           'If it persists, share this message with whoever maintains the agent.',
         ];
 
@@ -84,7 +95,8 @@ async function reportInvestigationError(source, dispute, err) {
         reason,
         error: errorText,
       },
-      nextSteps
+      nextSteps,
+      canRetry ? dispute.id : null
     );
   } catch (slackErr) {
     console.error(`[${source}] Also failed to post error to Slack:`, slackErr?.message || slackErr);
@@ -630,6 +642,34 @@ slackApp.action('dismiss_dispute', async ({ action, ack, body }) => {
   const ts = new Date().toISOString();
   await updateMessage(messageTs, `Dismissed at ${ts}`);
   console.log(`[server] Dispute ${dispute.id} dismissed`);
+});
+
+// Re-run a failed investigation. The button on an error post carries the raw
+// dispute id (not an encoded dispute object). We re-fetch the dispute fresh
+// from Stripe so the retry uses current data, then run the normal flow — which
+// posts a fresh recommendation on success, or another error post (with its own
+// retry button) on failure. This is the only self-serve way to reprocess a
+// dispute after an outage, since Stripe fires charge.dispute.created just once.
+slackApp.action('retry_investigation', async ({ action, ack, body }) => {
+  await ack();
+  const disputeId = typeof action.value === 'string' ? action.value : action.value?.id;
+  const messageTs = body.message?.ts || body.container?.message_ts;
+  if (!disputeId) {
+    console.error('[server] retry_investigation: missing dispute id', action.value);
+    return;
+  }
+  console.log(`[server] retry_investigation requested for ${disputeId}`);
+  try {
+    if (messageTs) {
+      await postFollowUp(messageTs, `:arrows_counterclockwise: Re-running investigation for ${disputeId}…`);
+    }
+    const { fetchDisputeFromEitherAccount } = await import('./integrations/stripe.js');
+    const { dispute } = await fetchDisputeFromEitherAccount(disputeId);
+    await investigateDispute(dispute);
+  } catch (err) {
+    console.error(`[server] retry_investigation failed for ${disputeId}:`, err);
+    await reportInvestigationError('retry', { id: disputeId }, err);
+  }
 });
 
 // --- Customer narrative flow ---

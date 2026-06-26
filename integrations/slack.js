@@ -621,7 +621,7 @@ export async function postDisputeRatioReport(report) {
   });
 }
 
-export async function postError(text, metadata = {}, nextSteps = null) {
+export async function postError(text, metadata = {}, nextSteps = null, retryDisputeId = null) {
   const metaStr = Object.entries(metadata)
     .map(([k, v]) => `${k}: ${v}`)
     .join(', ');
@@ -633,10 +633,38 @@ export async function postError(text, metadata = {}, nextSteps = null) {
     ? `\n\n:point_right: *Next steps:*\n` + steps.map((s, i) => `${i + 1}. ${s}`).join('\n')
     : '';
 
-  await web().chat.postMessage({
-    channel: channelId(),
-    text: `:x: *Error:* ${text}\n${metaStr ? `_${metaStr}_` : ''}${stepsStr}`,
-  });
+  // Plain-text version is always sent as the notification fallback.
+  const fullText = `:x: *Error:* ${text}\n${metaStr ? `_${metaStr}_` : ''}${stepsStr}`;
+  const message = { channel: channelId(), text: fullText };
+
+  // When a dispute id is supplied, render with Block Kit so we can attach a
+  // one-click "Retry investigation" button (the only self-serve way to re-run a
+  // dispute that failed during an outage). The button value is the raw id.
+  if (retryDisputeId) {
+    message.blocks = [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `:x: *Error:* ${text}${metaStr ? `\n_${metaStr}_` : ''}` },
+      },
+    ];
+    if (stepsStr) {
+      message.blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stepsStr.trim() } });
+    }
+    message.blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '🔄 Retry investigation', emoji: true },
+          style: 'primary',
+          action_id: 'retry_investigation',
+          value: String(retryDisputeId),
+        },
+      ],
+    });
+  }
+
+  await web().chat.postMessage(message);
 }
 
 export async function updateMessage(ts, text) {
