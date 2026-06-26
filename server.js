@@ -914,6 +914,32 @@ app.get('/debug/creds', async (req, res) => {
     out.bq_error = (e.message || String(e)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
   }
 
+  // Network-origin probes: is this server's outbound IP itself being blocked
+  // by Google at the edge (independent of any credential)?
+  const probe = async (url, opts = {}) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const r = await fetch(url, { signal: ctl.signal, ...opts });
+      const body = await r.text();
+      const isRobotBlock = /Error 403 \(Forbidden\)|images\/errors\/robot\.png/.test(body);
+      return { status: r.status, is_google_robot_block: isRobotBlock, body_snippet: body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) };
+    } catch (e) {
+      return { error: String(e.message || e).slice(0, 120) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  try {
+    out.egress_ip = (await probe('https://api.ipify.org')).body_snippet || null;
+  } catch { out.egress_ip = null; }
+  // Unauthenticated hit on a Google API host. Normal response: 401/403 JSON
+  // ("Login Required"). If instead it returns the robot 403 HTML page, the IP
+  // itself is blocked at Google's edge — credentials are irrelevant.
+  out.google_unauth_probe = await probe('https://bigquery.googleapis.com/bigquery/v2/projects/yhangry/datasets');
+  out.google_token_host_probe = await probe('https://oauth2.googleapis.com/');
+
   res.json(out);
 });
 
