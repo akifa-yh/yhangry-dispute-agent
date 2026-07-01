@@ -19,6 +19,7 @@ const ATTENDANCE_EMOJI = {
   NO_SHOW: ':rotating_light:',
   EVENT_CANCELLED_BY_CUSTOMER: ':no_entry_sign:',
   CUSTOMER_NO_SHOW: ':ghost:',
+  MERCHANT_DECLINED_TO_PERFORM: ':no_bell:',
 };
 
 const INDEPENDENCE_EMOJI = {
@@ -292,25 +293,40 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
   // case is unwinnable and we shouldn't be building a counter at all. Make
   // this impossible to miss; it sits above all the rebuttal-shaped content.
   if (analysis.recommendation === 'ACCEPT') {
-    const sig = analysis._fraud_signature;
     const overrideNote = analysis._overrode_recommendation
       ? ` _LLM initially recommended ${analysis._overrode_recommendation}; deterministic override applied._`
       : '';
-    const signalBits = sig
-      ? [
-          `issuer ${sig.issuerCountry || 'unknown'} on ${(sig.expectedCountry || 'unknown')} Stripe account`,
-          'no billing address',
-          `Stripe Radar ${sig.riskLevel || 'unknown'} risk`,
-          'fraud reason code',
-        ].join(' · ')
-      : '';
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `:stop_sign: *STOLEN-CARD FRAUD — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute* in the Stripe dashboard; do NOT counter. The legitimate cardholder did not authorise this charge, so platform-engagement evidence cannot rebut their claim — countering costs the same money and damages our merchant lost-dispute ratio.${signalBits ? `\n_Signals fired: ${signalBits}._` : ''}${overrideNote}`,
-      },
-    });
+    if (analysis.rebuttal_strategy === 'ACCEPT_MERCHANT_NONPERFORMANCE') {
+      // Surcharge-standoff / merchant non-performance (Maddie Fuhrman pattern):
+      // the cardholder paid in full for a service the chef then declined to
+      // deliver over an unagreed add-on fee. To the bank this is "services not
+      // received" — unwinnable, and the internal chef-coaching thread must never
+      // be submitted. Distinct copy from the stolen-card ACCEPT banner.
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `:no_bell: *MERCHANT NON-PERFORMANCE — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute*; do NOT counter. The cardholder paid in full for a service the chef then declined to deliver over an add-on fee the customer never agreed to — to the issuing bank this is "services not received", and our internal "chef's discretion / non-refundable" policy does not bind them. Countering loses the money anyway and hurts our lost-dispute ratio. Do NOT submit the booking terms/no-show exhibits or the internal chef-coaching thread. Any partial-cost recovery is a goodwill conversation with the customer, not a formal counter.${overrideNote}`,
+        },
+      });
+    } else {
+      const sig = analysis._fraud_signature;
+      const signalBits = sig
+        ? [
+            `issuer ${sig.issuerCountry || 'unknown'} on ${(sig.expectedCountry || 'unknown')} Stripe account`,
+            'no billing address',
+            `Stripe Radar ${sig.riskLevel || 'unknown'} risk`,
+            'fraud reason code',
+          ].join(' · ')
+        : '';
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `:stop_sign: *STOLEN-CARD FRAUD — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute* in the Stripe dashboard; do NOT counter. The legitimate cardholder did not authorise this charge, so platform-engagement evidence cannot rebut their claim — countering costs the same money and damages our merchant lost-dispute ratio.${signalBits ? `\n_Signals fired: ${signalBits}._` : ''}${overrideNote}`,
+        },
+      });
+    }
   }
 
   // Customer-admission banner — when Gmail correspondence contains a written
