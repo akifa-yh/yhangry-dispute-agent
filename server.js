@@ -213,12 +213,17 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
       );
     }
 
-    await submitEvidence(dispute.id, state.analysis, state.booking, docxBuffer);
+    const { account, dueBy } = await submitEvidence(dispute.id, state.analysis, state.booking, docxBuffer);
 
     const ts = new Date().toISOString();
+    const deadlineLine = dueBy
+      ? `\n:alarm_clock: *Respond-by deadline: ${new Date(dueBy * 1000).toUTCString()}* — the draft is worthless if nobody presses Submit before then.`
+      : '';
     await updateMessage(
       messageTs || state.message_ts,
-      `✅ Evidence submitted to Stripe at ${ts} (PDF source: ${pdfSource})`
+      `:memo: Evidence DRAFT saved to Stripe at ${ts} (PDF source: ${pdfSource})\n` +
+        `:warning: *NOT yet submitted to the bank.* Open the dispute in the Stripe dashboard (${account.toUpperCase()} account) and press *Submit evidence*.` +
+        deadlineLine
     );
   } catch (err) {
     console.error(`[server] Error approving dispute ${dispute.id}:`, err);

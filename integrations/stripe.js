@@ -301,8 +301,12 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
 
   console.log(`[stripe] Uploaded evidence file ${file.id} for dispute ${disputeId} (${account})`);
 
-  // Step 2: Submit evidence
-  await stripeClient.disputes.update(disputeId, {
+  // Step 2: Save evidence as a DRAFT on the dispute. submit:false is
+  // deliberate — a human reviews the draft in the Stripe dashboard and
+  // presses "Submit evidence" there. Stripe does NOT auto-submit drafts,
+  // so until that manual step happens the bank has received nothing.
+  // Callers must never describe this step as "submitted".
+  const updated = await stripeClient.disputes.update(disputeId, {
     evidence: {
       product_description:
         `Private chef dining experience — multi-course meal prepared and served at customer's home. Booking ref: ${booking.order_id}`,
@@ -313,9 +317,9 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
       uncategorized_text: (analysis.suggested_rebuttal_points || []).join('\n\n'),
       uncategorized_file: file.id,
     },
-    submit: false, // Keep false until verified in production
-    // TODO: flip to true when ready to go live
+    submit: false,
   });
 
-  console.log(`[stripe] Evidence submitted (submit=false) for dispute ${disputeId} (${account})`);
+  console.log(`[stripe] Evidence DRAFT saved (submit=false — needs manual submit in dashboard) for dispute ${disputeId} (${account})`);
+  return { account, dueBy: updated.evidence_details?.due_by || null };
 }
