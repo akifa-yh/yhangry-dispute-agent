@@ -137,6 +137,13 @@ function actionContext(action, body) {
   return { dispute, messageTs, channelId };
 }
 
+// In-flight guard: approve involves a 30-90s re-analysis on the cold path and
+// two Stripe writes; a double-click (or two approvers) raced two full
+// submissions and could attach different PDFs (GAN review ops-M2). Ids are
+// held only for the duration of the click — in-memory is fine because a
+// restart mid-approve kills the in-flight work anyway.
+const approvalsInFlight = new Set();
+
 slackApp.action('approve_dispute', async ({ action, ack, body }) => {
   await ack();
   const { dispute, messageTs } = actionContext(action, body);
@@ -144,6 +151,15 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     console.error('[server] approve_dispute: bad button payload', action.value);
     return;
   }
+
+  if (approvalsInFlight.has(dispute.id)) {
+    console.log(`[server] approve_dispute: ${dispute.id} already in flight — ignoring duplicate click`);
+    if (messageTs) {
+      await postFollowUp(messageTs, ':hourglass_flowing_sand: Approval already in progress for this dispute — hang tight, ignoring the extra click.').catch(() => {});
+    }
+    return;
+  }
+  approvalsInFlight.add(dispute.id);
 
   // Try in-memory state first; if missing (Render idle-sleep wiped it),
   // re-run the investigation from scratch so we have analysis + booking +
@@ -168,6 +184,7 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     } catch (err) {
       console.error(`[server] approve_dispute recovery failed for ${dispute.id}:`, err);
       if (messageTs) await postFollowUp(messageTs, `:x: Couldn't re-analyse dispute on approve: ${err.message}`);
+      approvalsInFlight.delete(dispute.id);
       return;
     }
   }
@@ -231,6 +248,8 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     if (messageTs || state.message_ts) {
       await postFollowUp(messageTs || state.message_ts, `:x: Error submitting evidence: ${err.message}`);
     }
+  } finally {
+    approvalsInFlight.delete(dispute.id);
   }
 });
 
@@ -968,9 +987,16 @@ app.get('/reports/deadline-check', async (req, res) => {
   }
 });
 
-// Test endpoint — triggers investigation with a known booking
-// Usage: curl -X POST http://localhost:3000/test/dispute
+// Test endpoint — triggers investigation with a known booking.
+// Gated behind TEST_DISPUTE_KEY: it accepts an arbitrary payment_intent and
+// pulls that customer's PII from BigQuery into Slack, so it must not sit open
+// on a guessable public URL (GAN review ops-M1). When the env var is unset
+// the endpoint is disabled entirely.
+// Usage: curl -X POST "http://localhost:3000/test/dispute?key=$TEST_DISPUTE_KEY"
 app.post('/test/dispute', express.json(), async (req, res) => {
+  if (!process.env.TEST_DISPUTE_KEY || req.query.key !== process.env.TEST_DISPUTE_KEY) {
+    return res.status(403).json({ error: 'forbidden — set TEST_DISPUTE_KEY on the service and pass ?key=' });
+  }
   const testDispute = {
     id: req.body?.id || 'dp_test_button_test',
     amount: req.body?.amount || 50000,

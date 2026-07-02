@@ -676,6 +676,19 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
         style: 'danger',
         action_id: 'dismiss_dispute',
         value: buttonPayload,
+        // Dismiss irreversibly replaces the whole review with one line, and
+        // charge.dispute.created never refires — so guard against fat-finger
+        // taps with a native confirm dialog (GAN review ops-M7).
+        confirm: {
+          title: { type: 'plain_text', text: 'Dismiss this dispute review?' },
+          text: {
+            type: 'mrkdwn',
+            text: 'This permanently replaces the analysis with a one-line "Dismissed" note. Stripe will NOT re-send this dispute — recovery needs a manual re-run.',
+          },
+          confirm: { type: 'plain_text', text: 'Dismiss it' },
+          deny: { type: 'plain_text', text: 'Keep it' },
+          style: 'danger',
+        },
       },
     ],
   });
