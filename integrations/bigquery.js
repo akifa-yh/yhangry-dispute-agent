@@ -86,6 +86,15 @@ export async function getBookingByPaymentId(paymentId) {
     LEFT JOIN ${t('chef_feedback')} cf ON cf.order_id = o.id AND cf.chef_id = ch.id
 
     WHERE o.payment_id = @paymentId
+    -- Chef replacements produce multiple chef_job rows per order; without an
+    -- ORDER BY, LIMIT 1 picked one nondeterministically — sometimes naming a
+    -- replaced chef in the bank-facing pack and keying the survey lookup to
+    -- the wrong chef (GAN review M3). Prefer non-cancelled assignments, then
+    -- the latest job, with chef_id as a deterministic tiebreak.
+    ORDER BY
+      CASE WHEN cj.status = 'cancelled' THEN 1 ELSE 0 END,
+      j.id DESC,
+      cj.chef_id DESC
     LIMIT 1
   `;
 
@@ -155,6 +164,11 @@ export async function getBookingByOrderId(orderId) {
     LEFT JOIN ${t('chef_feedback')} cf ON cf.order_id = o.id AND cf.chef_id = ch.id
 
     WHERE o.id = @orderId
+    -- Same nondeterministic-chef fix as getBookingByPaymentId (GAN M3).
+    ORDER BY
+      CASE WHEN cj.status = 'cancelled' THEN 1 ELSE 0 END,
+      j.id DESC,
+      cj.chef_id DESC
     LIMIT 1
   `;
 
