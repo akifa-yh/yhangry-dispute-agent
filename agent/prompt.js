@@ -1,3 +1,5 @@
+import { formatMoney } from '../utils/money.js';
+
 export const SYSTEM_PROMPT = `You are a dispute analyst for yhangry, a private chef marketplace based in the UK and US. Your job is to assess Stripe payment disputes and produce a structured analysis that helps the ops team take the right action — usually counter, sometimes accept.
 
 AGENT MISSION — WIN WHERE WINNABLE, ACCEPT WHERE UNWINNABLE:
@@ -1139,7 +1141,7 @@ export function buildUserMessage({
   fxSignature,
   searchStatus,
 }) {
-  const amount = (dispute.amount / 100).toFixed(2);
+  const amount = formatMoney(dispute.amount, dispute.currency);
 
   // Per-channel search health (ok | failed). Rendered prominently so the
   // model applies the SEARCH_INCOMPLETE deadline rule; absent on legacy
@@ -1243,7 +1245,7 @@ export function buildUserMessage({
 
   return `DISPUTE DETAILS:
 - Dispute ID: ${dispute.id}
-- Amount: $${amount}
+- Amount: ${amount}
 - Stripe reason: ${dispute.reason}
 - Network reason code: ${dispute.network_reason_code || 'N/A'}
 - Customer: ${booking.first_name} ${booking.last_name} (${booking.customer_email})

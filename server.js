@@ -27,6 +27,7 @@ import {
   decodeModalMetadata,
 } from './integrations/slack.js';
 import { parseVrolPdf } from './integrations/vrol_parser.js';
+import { formatMoney } from './utils/money.js';
 import { decodeButtonValue } from './agent/decision.js';
 import { generateEvidence } from './evidence/generator.js';
 
@@ -39,7 +40,7 @@ async function reportInvestigationError(source, dispute, err) {
   console.error(`[${source}] Error investigating dispute ${dispute?.id}:`, err);
   try {
     const amount = typeof dispute?.amount === 'number'
-      ? `$${(dispute.amount / 100).toFixed(2)}`
+      ? formatMoney(dispute.amount, dispute.currency)
       : 'unknown';
     const reason = dispute?.network_reason_code || dispute?.reason || 'unknown';
 

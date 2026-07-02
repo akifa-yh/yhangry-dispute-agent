@@ -13,6 +13,7 @@
 // descriptions when this returns null.
 
 import { GoogleGenAI } from '@google/genai';
+import { formatMoney } from '../utils/money.js';
 
 const googleAuthOptions = process.env.BIGQUERY_CREDENTIALS_JSON
   ? { credentials: JSON.parse(process.env.BIGQUERY_CREDENTIALS_JSON) }
@@ -92,7 +93,7 @@ merchant, without any indication that an internal tool produced it.
 
 DISPUTE CONTEXT (for your reasoning only — do NOT quote in output):
 - Dispute ID: ${dispute.id}
-- Amount: $${((dispute.amount || 0) / 100).toFixed(2)}
+- Amount: ${formatMoney(dispute.amount, dispute.currency)}
 - Stripe reason: ${dispute.reason || 'N/A'}
 - Network reason code: ${dispute.network_reason_code || 'N/A'}
 - Customer: ${customerName || 'unknown'}

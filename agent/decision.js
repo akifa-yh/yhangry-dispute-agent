@@ -1,3 +1,5 @@
+import { formatMoney } from '../utils/money.js';
+
 const RECOMMENDATION_EMOJI = {
   ACCEPT: ':stop_sign:',
   STRONG_COUNTER: ':white_check_mark:',
@@ -169,7 +171,7 @@ function buildStripeFormGuidance(dispute, analysis, booking) {
 }
 
 export function formatSlackMessage(analysis, dispute, booking, options = {}) {
-  const amount = (dispute.amount / 100).toFixed(2);
+  const amount = formatMoney(dispute.amount, dispute.currency);
   const recEmoji = RECOMMENDATION_EMOJI[analysis.recommendation] || ':question:';
   const attEmoji = ATTENDANCE_EMOJI[analysis.chef_attendance_assessment] || ':question:';
 
@@ -268,7 +270,7 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     type: 'header',
     text: {
       type: 'plain_text',
-      text: `[DISPUTE] $${amount} — ${dispute.network_reason_code || dispute.reason} — ${booking.first_name} ${booking.last_name}`,
+      text: `[DISPUTE] ${amount} — ${dispute.network_reason_code || dispute.reason} — ${booking.first_name} ${booking.last_name}`,
     },
   });
 
@@ -622,6 +624,7 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     id: dispute.id,
     pi: dispute.payment_intent || dispute.charge,
     amt: dispute.amount,
+    cur: dispute.currency || null,
     r: dispute.reason,
     nrc: dispute.network_reason_code || null,
   });
@@ -694,6 +697,7 @@ export function decodeButtonValue(value) {
         id: parsed.id,
         payment_intent: parsed.pi,
         amount: parsed.amt,
+        currency: parsed.cur || null,
         reason: parsed.r,
         network_reason_code: parsed.nrc,
       };
@@ -701,5 +705,5 @@ export function decodeButtonValue(value) {
   } catch {
     // Not JSON — assume legacy format where value was the dispute id directly
   }
-  return { id: value, payment_intent: null, amount: null, reason: null, network_reason_code: null };
+  return { id: value, payment_intent: null, amount: null, currency: null, reason: null, network_reason_code: null };
 }

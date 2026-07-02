@@ -8,6 +8,7 @@ import * as conduit from '../integrations/conduit.js';
 import * as slack from '../integrations/slack.js';
 import { fetchCustomerCorrespondence, fetchChefCorrespondence } from '../integrations/gmail.js';
 import { getComplaintDeadline } from '../utils/timezone.js';
+import { formatMoney } from '../utils/money.js';
 import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { lookupMatrixEntry } from './evidence_matrix.js';
 import { computeFraudSignature } from './fraud_signature.js';
@@ -590,7 +591,7 @@ export async function investigateDispute(dispute) {
   if (!result.booking) {
     await slack.postError(
       `DISPUTE — booking not found for payment_id: ${result.paymentId}`,
-      { dispute_id: disputeId, amount: `$${(amount / 100).toFixed(2)}` }
+      { dispute_id: disputeId, amount: formatMoney(amount, dispute.currency) }
     );
     return;
   }

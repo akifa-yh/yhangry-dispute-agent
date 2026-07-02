@@ -1,5 +1,6 @@
 import { WebClient } from '@slack/web-api';
 import { formatSlackMessage } from '../agent/decision.js';
+import { formatMoney } from '../utils/money.js';
 
 // Lazy init — env vars may not be loaded when this module is first imported
 let _web;
@@ -29,7 +30,7 @@ export async function postDisputeReview(analysis, dispute, booking, allContacts,
   const result = await web().chat.postMessage({
     channel: channelId(),
     blocks,
-    text: `[DISPUTE] $${(dispute.amount / 100).toFixed(2)} — ${booking.first_name} ${booking.last_name}`,
+    text: `[DISPUTE] ${formatMoney(dispute.amount, dispute.currency)} — ${booking.first_name} ${booking.last_name}`,
   });
 
   // Store everything needed to re-analyse on narrative paste, generate
@@ -126,7 +127,7 @@ export async function updateDisputeReview({
     channel: state.channel_id,
     ts: state.message_ts,
     blocks,
-    text: `[DISPUTE] $${(dispute.amount / 100).toFixed(2)} — ${booking.first_name} ${booking.last_name} (updated)`,
+    text: `[DISPUTE] ${formatMoney(dispute.amount, dispute.currency)} — ${booking.first_name} ${booking.last_name} (updated)`,
   });
 
   // Refresh state so subsequent button clicks act on the latest analysis
@@ -536,7 +537,7 @@ export async function updateDisputeReviewByCoords({
     channel: channelId,
     ts: messageTs,
     blocks,
-    text: `[DISPUTE] $${(dispute.amount / 100).toFixed(2)} — ${booking.first_name} ${booking.last_name} (updated)`,
+    text: `[DISPUTE] ${formatMoney(dispute.amount, dispute.currency)} — ${booking.first_name} ${booking.last_name} (updated)`,
   });
 
   // Best-effort: if state happens to exist in this process, refresh it so

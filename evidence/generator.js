@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { formatMoney } from '../utils/money.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -564,16 +565,8 @@ function drawBottomLineCallout(doc, callout) {
   doc.y = startY + totalH + 10;
 }
 
-// Currency-aware money formatting. The TRANSACTION cell previously hardcoded
-// "$", so GBP (UK-account) disputes mis-rendered as dollars (e.g. a £50 charge
-// showed "$50.00"). Derive the symbol from the dispute's actual currency.
-const CURRENCY_SYMBOLS = { usd: '$', gbp: '£', eur: '€', aud: 'A$', cad: 'C$' };
-function formatMoney(amountMinor, currency) {
-  const cur = String(currency || '').toLowerCase();
-  const amt = (Number(amountMinor || 0) / 100).toFixed(2);
-  const sym = CURRENCY_SYMBOLS[cur];
-  return sym ? `${sym}${amt}` : `${amt} ${cur.toUpperCase()}`.trim();
-}
+// Currency-aware money formatting lives in utils/money.js (shared with the
+// Slack + prompt surfaces since the GAN batch-2 currency fix).
 
 function drawFactsGrid(doc, dispute, booking, analysis) {
   // STATUS / recommendation / rebuttal_strategy are internal ops vocabulary
