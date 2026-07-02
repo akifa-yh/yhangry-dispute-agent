@@ -679,6 +679,47 @@ export async function postDeadlineAlert(openDisputes, urgentHours = 48) {
   return true;
 }
 
+// Durable pre-investigation breadcrumb. Stripe fires charge.dispute.created
+// exactly once and the webhook is ACKed before the 30-90s investigation runs,
+// so a crash/redeploy mid-flight used to lose the dispute with no trace
+// (GAN review ops-H3). Posting this BEFORE the work starts means the worst
+// case is an orphaned message with a working Retry button instead of silence.
+// Never throws — a Slack hiccup must not block the investigation itself.
+export async function postInvestigationStarted(dispute) {
+  try {
+    const res = await web().chat.postMessage({
+      channel: channelId(),
+      text: `🔍 Investigating dispute ${dispute.id}…`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text:
+              `:mag: *Investigating dispute \`${dispute.id}\`* (${formatMoney(dispute.amount, dispute.currency)} · ${dispute.network_reason_code || dispute.reason || 'reason unknown'}) — review posts in ~1-2 min.\n` +
+              `_If no review or error appears below after ~5 minutes, the service restarted mid-investigation — click Retry._`,
+          },
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '🔄 Retry investigation', emoji: true },
+              action_id: 'retry_investigation',
+              value: String(dispute.id),
+            },
+          ],
+        },
+      ],
+    });
+    return res.ts || null;
+  } catch (err) {
+    console.warn('[slack] investigation breadcrumb failed (non-fatal):', err.message);
+    return null;
+  }
+}
+
 export async function postError(text, metadata = {}, nextSteps = null, retryDisputeId = null) {
   const metaStr = Object.entries(metadata)
     .map(([k, v]) => `${k}: ${v}`)

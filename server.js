@@ -25,6 +25,7 @@ import {
   updateDisputeReview,
   updateDisputeReviewByCoords,
   decodeModalMetadata,
+  postInvestigationStarted,
 } from './integrations/slack.js';
 import { parseVrolPdf } from './integrations/vrol_parser.js';
 import { formatMoney } from './utils/money.js';
@@ -879,9 +880,30 @@ app.post(
     if (event.type === 'charge.dispute.created') {
       const dispute = event.data.object;
       console.log(`[stripe] Received dispute: ${dispute.id}`);
-      investigateDispute(dispute).catch((err) =>
-        reportInvestigationError('webhook', dispute, err)
-      );
+      // Post a durable breadcrumb BEFORE the 30-90s investigation: Stripe
+      // sends this event exactly once, so a crash/redeploy mid-flight used to
+      // lose the dispute silently. An orphaned breadcrumb (no review/error
+      // below it) is the recovery signal, and it carries a Retry button.
+      (async () => {
+        const breadcrumbTs = await postInvestigationStarted(dispute);
+        try {
+          await investigateDispute(dispute);
+          if (breadcrumbTs) {
+            await updateMessage(
+              breadcrumbTs,
+              `:mag: ${dispute.id} — investigation complete; review posted below.`
+            ).catch(() => {});
+          }
+        } catch (err) {
+          await reportInvestigationError('webhook', dispute, err);
+          if (breadcrumbTs) {
+            await updateMessage(
+              breadcrumbTs,
+              `:mag: ${dispute.id} — investigation errored; see the error post below for next steps.`
+            ).catch(() => {});
+          }
+        }
+      })();
     } else if (event.type === 'charge.dispute.closed') {
       // Post the actual financial outcome (per Stripe's API view) to
       // #stripe-disputes. Added 2026-05-21 after the Katie Robertson Visa
