@@ -90,6 +90,10 @@ function formatDeadline(analysis) {
   const { deadline_status, earliest_contact } = analysis;
   const ec = earliest_contact || {};
 
+  if (deadline_status === 'SEARCH_INCOMPLETE') {
+    return ':warning: Contact search INCOMPLETE — one or more channels errored. "No complaint" is UNVERIFIED; deadline argument unavailable. Retry once the failing integration is back.';
+  }
+
   if (deadline_status === 'NO_COMPLAINT_FOUND') {
     return ':no_entry_sign: No contact found on any channel';
   }
@@ -298,6 +302,26 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     type: 'section',
     text: { type: 'mrkdwn', text: summaryLines.join('\n') },
   });
+
+  // Evidence-search health warning — a failed channel means the analysis ran
+  // on incomplete inputs. Rendered right under the summary so ops can't act
+  // on a "no complaint / no admission" premise that was never verified.
+  const failedSearches = Object.entries(analysis._search_status || {})
+    .filter(([, v]) => v === 'failed')
+    .map(([k]) => k);
+  if (failedSearches.length) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text:
+          `:warning: *EVIDENCE SEARCH FAILED on: ${failedSearches.join(', ')}.* ` +
+          `This analysis ran on incomplete inputs — anything resting on "customer never contacted us"` +
+          `${failedSearches.includes('gmail') ? ' or "no admission email exists"' : ''} is unverified. ` +
+          `Fix/wait out the integration and click *Retry investigation* before submitting anything.`,
+      },
+    });
+  }
 
   // ACCEPT banner — when the stolen-card signature flags STRONG_MATCH, the
   // case is unwinnable and we shouldn't be building a counter at all. Make

@@ -119,7 +119,10 @@ export async function getInboundCalls(phoneE164, fromUnixTimestamp) {
       raw_digits: call.raw_digits,
     }));
   } catch (err) {
+    // Rethrow rather than returning [] — the caller must be able to tell
+    // "no calls found" apart from "search failed", or an Aircall outage
+    // becomes a false NO_COMPLAINT_FOUND claim in the evidence pack.
     console.error('[aircall] Error fetching calls:', err.message);
-    return [];
+    throw err;
   }
 }

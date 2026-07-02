@@ -75,8 +75,10 @@ export async function searchContact(email) {
     console.log(`[conduit] Contact not found for email: ${email} (searched ${allContacts.length} contacts)`);
     return null;
   } catch (err) {
+    // Rethrow rather than returning null — null means "searched, contact not
+    // found"; an API error must not masquerade as that (false-NO_COMPLAINT risk).
     console.error('[conduit] Error searching contact:', err.response?.status, err.response?.data?.error || err.message);
-    return null;
+    throw err;
   }
 }
 
@@ -97,8 +99,9 @@ export async function getContactMessages(contactId) {
       channel: 'conduit',
     }));
   } catch (err) {
+    // Rethrow — see searchContact note (false-NO_COMPLAINT risk).
     console.error('[conduit] Error fetching messages:', err.response?.status, err.response?.data?.error || err.message);
-    return [];
+    throw err;
   }
 }
 
@@ -120,8 +123,9 @@ export async function getContactTickets(contactId) {
         channel: 'conduit',
       }));
   } catch (err) {
+    // Rethrow — see searchContact note (false-NO_COMPLAINT risk).
     console.error('[conduit] Error fetching tickets:', err.response?.status, err.response?.data?.error || err.message);
-    return [];
+    throw err;
   }
 }
 

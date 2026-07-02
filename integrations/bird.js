@@ -96,7 +96,9 @@ export async function getInboundMessages(phoneE164, fromIsoDate) {
       .filter((m) => m.direction === 'incoming')
       .sort((a, b) => new Date(a.timestamp_iso) - new Date(b.timestamp_iso));
   } catch (err) {
+    // Rethrow rather than returning [] — the caller must be able to tell
+    // "no messages found" apart from "search failed" (false-NO_COMPLAINT risk).
     console.error('[bird] Error:', err.response?.status, err.response?.data?.message || err.message);
-    return [];
+    throw err;
   }
 }

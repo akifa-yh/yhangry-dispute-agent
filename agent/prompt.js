@@ -153,6 +153,15 @@ contacts you see in ALL CONTACT ATTEMPTS are post-event candidates only.
   deadline → strong counter (deadline argument wins)
 - TIMELY_COMPLAINT: earliest post-event contact at or before the deadline →
   neutral, evaluate substance of the case via narrative claim mapping
+- SEARCH_INCOMPLETE: the CONTACT SEARCH STATUS section reports that one or
+  more contact channels FAILED. A failed search is NOT evidence of silence.
+  When any of aircall/bird/conduit failed, you may only use:
+  · TIMELY_COMPLAINT — if a working channel already found a timely complaint
+    (a found complaint is a found complaint), or
+  · SEARCH_INCOMPLETE — in every other case, including when the earliest
+    found contact looks late (an earlier one may exist in the failed channel).
+  NEVER NO_COMPLAINT_FOUND, NEVER LATE_COMPLAINT, and never build a
+  deadline-based counter on an incomplete search.
 
 Voicemails count. Automated replies count.
 
@@ -1011,7 +1020,7 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
   "dispute_id": "string",
   "booking_id": "string",
   "narrative_provided": "boolean (true if a customer narrative was included in the user message)",
-  "deadline_status": "LATE_COMPLAINT | TIMELY_COMPLAINT | NO_COMPLAINT_FOUND",
+  "deadline_status": "LATE_COMPLAINT | TIMELY_COMPLAINT | NO_COMPLAINT_FOUND | SEARCH_INCOMPLETE",
   "deadline_iso": "ISO string",
   "customer_timezone": "IANA timezone string",
   "earliest_contact": {
@@ -1112,8 +1121,24 @@ export function buildUserMessage({
   chefMessages,
   fraudSignature,
   fxSignature,
+  searchStatus,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
+
+  // Per-channel search health (ok | failed). Rendered prominently so the
+  // model applies the SEARCH_INCOMPLETE deadline rule; absent on legacy
+  // callers/tests → assume all ok.
+  const ss = searchStatus || { aircall: 'ok', bird: 'ok', conduit: 'ok', gmail: 'ok' };
+  const failedContactChannels = ['aircall', 'bird', 'conduit'].filter((c) => ss[c] === 'failed');
+  const searchStatusSection = [
+    `- aircall: ${ss.aircall} | bird: ${ss.bird} | conduit: ${ss.conduit} | gmail (info@): ${ss.gmail}`,
+    failedContactChannels.length
+      ? `⚠️ CONTACT SEARCH FAILED on: ${failedContactChannels.join(', ')}. The ALL CONTACT ATTEMPTS list below is INCOMPLETE — apply the SEARCH_INCOMPLETE deadline rule. Do NOT claim the customer never contacted us.`
+      : '- All contact channels searched successfully.',
+    ss.gmail === 'failed'
+      ? `⚠️ GMAIL SEARCH FAILED. The GMAIL CORRESPONDENCE section below may be missing emails — the absence of an admission email means UNKNOWN, not "no admission exists". Add a flag noting admission detection was unavailable.`
+      : '',
+  ].filter(Boolean).join('\n');
 
   const contactsSection =
     allContacts.length > 0
@@ -1226,6 +1251,9 @@ PRE-EVENT CONTEXT:
 
 PRIOR DISPUTES ON THIS PAYMENT (same charge — may be under different reason codes; apply MULTIPLE DISPUTES ON ONE PAYMENT rules):
 ${priorDisputesSection}
+
+CONTACT SEARCH STATUS (deterministic — whether each evidence search actually ran):
+${searchStatusSection}
 
 DEADLINE:
 - Customer timezone: ${timezone}

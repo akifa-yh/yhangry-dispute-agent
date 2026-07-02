@@ -233,6 +233,22 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
 
   const earliestContact = allContacts[0] || null;
 
+  // Per-channel search health. A failed channel means "we don't know" — NOT
+  // "no complaint" — and everything downstream (prompt, Slack post, PDF) must
+  // treat it that way, or an outage turns into a false procedural claim to
+  // the bank. (GAN review 2026-07-02, top cross-cutting finding.)
+  const searchStatus = {
+    aircall: aircallResults.status === 'fulfilled' ? 'ok' : 'failed',
+    bird: birdResults.status === 'fulfilled' ? 'ok' : 'failed',
+    conduit: conduitResults.status === 'fulfilled' ? 'ok' : 'failed',
+    gmail: 'ok',
+  };
+  for (const [channel, result] of Object.entries({ aircall: aircallResults, bird: birdResults, conduit: conduitResults })) {
+    if (result.status === 'rejected') {
+      console.error(`[agent] ⚠️ CONTACT SEARCH FAILED on ${channel}: ${result.reason?.message || result.reason}`);
+    }
+  }
+
   console.log(`[agent] Found ${allContacts.length} contact attempts across all channels`);
 
   // Step 5: Pull platform messages
@@ -260,6 +276,9 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     });
   } catch (err) {
     console.warn('[agent] Gmail fetch failed (non-fatal):', err.message);
+    // Flag it — an unnoticed Gmail outage silently disables admission
+    // detection (our strongest win class). Downstream renders a warning.
+    searchStatus.gmail = 'failed';
   }
 
   // Step 5a': Pull recent chefs@ correspondence with the chef on this booking —
@@ -401,6 +420,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     chefMessages,
     fraudSignature,
     fxSignature,
+    searchStatus,
   });
 
   console.log(`[agent] Gemini recommendation: ${analysis.recommendation} (narrative_provided: ${analysis.narrative_provided})`);
@@ -433,6 +453,24 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   // can show signal details on ACCEPT posts without re-fetching the charge.
   if (fraudSignature) {
     analysis._fraud_signature = fraudSignature;
+  }
+
+  // Stash search health so decision.js can warn ops and generator.js can
+  // refuse to print "no contact attempts found" claims built on a failed
+  // search. Deterministic backstop: the LLM is also told (in the prompt) to
+  // use SEARCH_INCOMPLETE, but if it claims NO_COMPLAINT_FOUND anyway when a
+  // contact channel errored, correct it here.
+  analysis._search_status = searchStatus;
+  const contactChannelFailed = ['aircall', 'bird', 'conduit'].some((c) => searchStatus[c] === 'failed');
+  if (contactChannelFailed && (analysis.deadline_status === 'NO_COMPLAINT_FOUND' || analysis.deadline_status === 'LATE_COMPLAINT')) {
+    console.warn(
+      `[agent] Overriding deadline_status ${analysis.deadline_status} → SEARCH_INCOMPLETE (contact channel search failed)`
+    );
+    analysis.deadline_status = 'SEARCH_INCOMPLETE';
+    analysis.flags = [
+      ...(analysis.flags || []),
+      'Contact search failed on one or more channels — deadline/no-complaint arguments are unavailable until re-run succeeds. Click Retry investigation once the failing integration is back.',
+    ];
   }
 
   // Deterministic safety net for FX-gap disputes — parallels the stolen-card
