@@ -691,6 +691,22 @@ slackApp.action('retry_investigation', async ({ action, ack, body }) => {
     }
     const { fetchDisputeFromEitherAccount } = await import('./integrations/stripe.js');
     const { dispute } = await fetchDisputeFromEitherAccount(disputeId);
+
+    // Don't resurrect a decided dispute: re-running posts a fresh review with
+    // a live Approve button, and approving it would overwrite the evidence
+    // that was already submitted (or fight a dispute that's already closed).
+    const OPEN_STATUSES = new Set(['needs_response', 'warning_needs_response']);
+    if (dispute.status && !OPEN_STATUSES.has(dispute.status)) {
+      console.log(`[server] retry_investigation blocked for ${disputeId} — status is '${dispute.status}'`);
+      if (messageTs) {
+        await postFollowUp(
+          messageTs,
+          `:no_entry: Not re-running ${disputeId} — its Stripe status is *${dispute.status}*, so there's nothing left to investigate or submit. Check the dispute in the Stripe dashboard if this looks wrong.`
+        );
+      }
+      return;
+    }
+
     await investigateDispute(dispute);
   } catch (err) {
     console.error(`[server] retry_investigation failed for ${disputeId}:`, err);

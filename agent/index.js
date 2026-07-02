@@ -489,6 +489,23 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     ];
   }
 
+  // Recompute minutes_relative_to_deadline deterministically. The LLM's
+  // cross-timezone minute arithmetic becomes the PDF's leading "X HOURS Y
+  // MINS PAST DEADLINE" headline — both inputs are known here, so never
+  // trust generated arithmetic for a bank-facing number (GAN review M5).
+  if (analysis.earliest_contact?.timestamp_iso && deadlineIso) {
+    const contactMs = Date.parse(analysis.earliest_contact.timestamp_iso);
+    const deadlineMs = Date.parse(deadlineIso);
+    if (Number.isFinite(contactMs) && Number.isFinite(deadlineMs)) {
+      const mins = Math.round((contactMs - deadlineMs) / 60000);
+      const llmMins = analysis.earliest_contact.minutes_relative_to_deadline;
+      if (llmMins !== mins) {
+        console.log(`[agent] Correcting minutes_relative_to_deadline: LLM said ${llmMins}, actual ${mins}`);
+      }
+      analysis.earliest_contact.minutes_relative_to_deadline = mins;
+    }
+  }
+
   // Deterministic safety net for FX-gap disputes — parallels the stolen-card
   // override above. STRONG_MATCH (all 4 signals fire: processing-error code +
   // foreign card + partial dispute + FX-shaped ratio) means the case is
