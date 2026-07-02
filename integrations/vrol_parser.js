@@ -47,8 +47,18 @@ export async function parseVrolPdf(buffer) {
   if (catMatch) {
     reasonCode = catMatch[1];
   } else {
-    const visaAny = text.match(/\b(1[0-3]\.\d+(?:\.\d+)?)\b/);
-    const mcAny = text.match(/\b(4\d{3})\b/);
+    // Fallback scan of the whole text. This value OVERRIDES the dispute's
+    // reason code downstream ("VROL is authoritative"), so it must never be
+    // a money amount that happens to look like a code: the old patterns
+    // matched "10.40" inside "$310.40" and any 4-digit number like "4500"
+    // (GAN review M9). Visa minors are single digits (13.1, 12.6.1), and
+    // Mastercard codes are validated against the known chargeback set.
+    const MC_KNOWN_CODES = [
+      '4807', '4808', '4812', '4831', '4834', '4837', '4841', '4842', '4846',
+      '4849', '4853', '4854', '4855', '4859', '4860', '4863', '4870', '4871',
+    ];
+    const visaAny = text.match(/\b(1[0-3]\.[1-9](?:\.[1-9])?)\b/);
+    const mcAny = text.match(new RegExp(`\\b(${MC_KNOWN_CODES.join('|')})\\b`));
     if (visaAny) reasonCode = visaAny[1];
     else if (mcAny) reasonCode = mcAny[1];
   }
