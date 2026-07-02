@@ -51,12 +51,14 @@ export async function searchContact(email) {
         if (fn.includes(emailLower) || ln.includes(emailLower)) return true;
 
         // Local-part heuristic. Local part of `tnader@mainstaymedical.com` is `tnader`.
-        // We match if it appears as a substring in fn or ln. Require localPart to be at
-        // least 4 chars to avoid false-positive matches on common short names like "tom"
-        // or "ana" against unrelated contacts. Use word-boundary-ish check via space-pad.
+        // Match only as a WHOLE name token — substring matching let `anna@` match
+        // "Joanna Smith" and `beth@` match "Elizabeth", pulling a stranger's contact
+        // history into the evidence pack (GAN review 2026-07-02). Require ≥4 chars to
+        // avoid false positives on common short names like "tom" or "ana". Tokens are
+        // split on spaces, dots, and hyphens so "anna-marie" still yields "anna".
         if (localPart.length >= 4) {
-          const fullName = ` ${fn} ${ln} `;
-          if (fullName.includes(localPart)) return true;
+          const nameTokens = `${fn} ${ln}`.split(/[\s.\-]+/).filter(Boolean);
+          if (nameTokens.includes(localPart)) return true;
         }
 
         return false;
@@ -141,5 +143,13 @@ export async function getAllContactActivity(email, fromIsoDate) {
   const fromDate = new Date(fromIsoDate);
   return [...messages, ...tickets]
     .filter((item) => new Date(item.timestamp_iso) >= fromDate)
+    // Only INBOUND activity counts as a customer contact attempt. Without
+    // this, yhangry's own outbound support emails became "contact attempts"
+    // and could be presented as the customer's first complaint (or convert a
+    // true no-complaint case into a fake timely one). Tickets have no
+    // direction field and are customer-created — they stay. Unknown
+    // direction stays too (conservative: better a spurious candidate than a
+    // false 'never contacted us').
+    .filter((item) => !/out/i.test(item.direction || ''))
     .sort((a, b) => new Date(a.timestamp_iso) - new Date(b.timestamp_iso));
 }
