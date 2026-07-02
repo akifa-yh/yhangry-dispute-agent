@@ -7,6 +7,14 @@ import { fetchChargeFromEitherAccount } from '../integrations/stripe.js';
 const FRAUD_NETWORK_CODES = new Set(['10.4', '4837', '4863']);
 const FRAUD_REASONS = new Set(['fraudulent']);
 
+// MC 4863 "Cardholder Does Not Recognize" is fraud-flavoured but frequently
+// resolves when the customer remembers the charge (or a family member made
+// it) — the evidence matrix's own entry says these are often winnable with
+// platform-engagement proof. It therefore qualifies for signal display and
+// PARTIAL_MATCH, but must never produce the STRONG_MATCH verdict that
+// triggers the deterministic forced-ACCEPT (GAN review 2026-07-02).
+const CAPPED_AT_PARTIAL_CODES = new Set(['4863']);
+
 function isFraudCode(dispute) {
   if (FRAUD_REASONS.has(dispute.reason)) return true;
   if (dispute.network_reason_code && FRAUD_NETWORK_CODES.has(dispute.network_reason_code)) return true;
@@ -106,6 +114,16 @@ export async function computeFraudSignature(dispute) {
   if (nonPrereqHits === 3) verdict = 'STRONG_MATCH';
   else if (nonPrereqHits === 2) verdict = 'PARTIAL_MATCH';
   else verdict = 'NO_MATCH';
+
+  // 4863 cap: "doesn't recognize" is not "didn't authorise" — show the
+  // signals but leave the ACCEPT decision to the LLM + ops.
+  if (
+    verdict === 'STRONG_MATCH' &&
+    !FRAUD_REASONS.has(dispute.reason) &&
+    CAPPED_AT_PARTIAL_CODES.has(dispute.network_reason_code)
+  ) {
+    verdict = 'PARTIAL_MATCH';
+  }
 
   return {
     verdict,

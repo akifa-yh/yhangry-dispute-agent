@@ -60,7 +60,11 @@ The user message includes a STOLEN-CARD SIGNAL block with a verdict
 computed deterministically from the Stripe charge:
   1. fraud_code      — reason is 'fraudulent' or network code 10.4 /
                        4837 / 4863 (prerequisite for the pattern to
-                       even apply)
+                       even apply). NOTE: 4863 "cardholder does not
+                       recognize" is capped at PARTIAL_MATCH — these
+                       often resolve when the customer remembers the
+                       charge, so weigh platform engagement rather
+                       than assuming theft.
   2. foreign_card    — issuer country ≠ Stripe account country (e.g.
                        a Swiss-issued card on a UK booking, or a
                        French-issued card on a US booking)

@@ -431,7 +431,25 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
   // the fraudster). Force ACCEPT even if the LLM ignored the rule. We
   // preserve the LLM's reasoning prefixed with an override notice so ops
   // can see what was overridden.
-  if (fraudSignature?.verdict === 'STRONG_MATCH' && analysis.recommendation !== 'ACCEPT') {
+  // Escape hatch: a detected customer admission ("sorry, my husband booked
+  // this", "I'll withdraw the dispute") proves the legitimate cardholder DID
+  // engage — the stolen-card premise is dead and the case is near-certainly
+  // winnable. Never force-surrender over it; flag the conflict for ops
+  // instead. (GAN review 2026-07-02: the override used to re-fire on every
+  // re-analysis with no way out, ACCEPTing winnable admission cases.)
+  const admissionBlocksFraudOverride =
+    fraudSignature?.verdict === 'STRONG_MATCH' && analysis.customer_admission_detected === true;
+  if (admissionBlocksFraudOverride) {
+    console.warn(
+      '[agent] Fraud signature STRONG_MATCH but customer admission detected — NOT forcing ACCEPT; deferring to admission-led strategy'
+    );
+    analysis.flags = [
+      ...(analysis.flags || []),
+      'Stolen-card signature STRONG_MATCH BUT a customer admission was detected — signals conflict. The admission suggests the legitimate cardholder engaged, so the forced-ACCEPT override was skipped. Verify the admission quote before countering.',
+    ];
+  }
+
+  if (fraudSignature?.verdict === 'STRONG_MATCH' && analysis.recommendation !== 'ACCEPT' && !admissionBlocksFraudOverride) {
     console.warn(
       `[agent] Overriding LLM recommendation ${analysis.recommendation} → ACCEPT (fraud signature STRONG_MATCH)`
     );
