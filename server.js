@@ -145,6 +145,28 @@ function actionContext(action, body) {
 // restart mid-approve kills the in-flight work anyway.
 const approvalsInFlight = new Set();
 
+// Optional approver allowlist (GAN review ops-M7): when SLACK_APPROVER_IDS is
+// set (comma-separated Slack user ids), only listed users can Approve,
+// Dismiss, or Escalate. Unset = everyone in the channel (current behavior) —
+// dormant until ops decides who should hold the pen.
+async function checkApprover(body, messageTs, actionLabel) {
+  const allow = (process.env.SLACK_APPROVER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!allow.length) return true;
+  const userId = body.user?.id;
+  if (userId && allow.includes(userId)) return true;
+  console.log(`[server] ${actionLabel} blocked for unauthorized user ${userId || 'unknown'}`);
+  if (messageTs) {
+    await postFollowUp(
+      messageTs,
+      `:lock: <@${userId}> — *${actionLabel}* is limited to the approver list (SLACK_APPROVER_IDS). Nothing was changed.`
+    ).catch(() => {});
+  }
+  return false;
+}
+
 slackApp.action('approve_dispute', async ({ action, ack, body }) => {
   await ack();
   const { dispute, messageTs } = actionContext(action, body);
@@ -152,6 +174,8 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
     console.error('[server] approve_dispute: bad button payload', action.value);
     return;
   }
+
+  if (!(await checkApprover(body, messageTs, 'Approve & Generate Evidence'))) return;
 
   if (approvalsInFlight.has(dispute.id)) {
     console.log(`[server] approve_dispute: ${dispute.id} already in flight — ignoring duplicate click`);
@@ -651,6 +675,7 @@ slackApp.action('escalate_dispute', async ({ action, ack, body }) => {
   await ack();
   const { dispute, messageTs } = actionContext(action, body);
   if (!dispute?.id || !messageTs) return;
+  if (!(await checkApprover(body, messageTs, 'Escalate for Review'))) return;
 
   const ts = new Date().toISOString();
   await updateMessage(messageTs, `🔴 Escalated for manual review at ${ts}`);
@@ -664,6 +689,7 @@ slackApp.action('dismiss_dispute', async ({ action, ack, body }) => {
   await ack();
   const { dispute, messageTs } = actionContext(action, body);
   if (!dispute?.id || !messageTs) return;
+  if (!(await checkApprover(body, messageTs, 'Dismiss'))) return;
 
   const ts = new Date().toISOString();
   await updateMessage(messageTs, `Dismissed at ${ts}`);
