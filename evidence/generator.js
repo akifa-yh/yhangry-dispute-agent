@@ -19,6 +19,10 @@ const CLICK_TO_ACCEPT_CODES = new Set([
   'visa:12.3', 'visa:12.5', 'visa:12.6.1', 'visa:12.6.2',
   'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
   'mastercard:4853', 'mastercard:4860',
+  // Amex equivalents (GAN review M4): the C31/C05 matrix entries tell the
+  // model the checkout screenshot is auto-embedded "same as Visa 13.3" —
+  // without these keys the pack cited an exhibit that wasn't attached.
+  'amex:C31', 'amex:C05', 'amex:C02', 'amex:C08',
 ]);
 
 // Codes where the cancellation/refund T&Cs screenshot is material evidence.
@@ -33,6 +37,9 @@ const CLICK_TO_ACCEPT_CODES = new Set([
 const CANCELLATION_TERMS_CODES = new Set([
   'visa:13.3', 'visa:13.5', 'visa:13.6', 'visa:13.7',
   'mastercard:4853', 'mastercard:4860',
+  // Amex equivalents — C31 not-as-described, C05 cancelled, C02 credit not
+  // processed all turn on whether the cancellation policy bound the customer.
+  'amex:C31', 'amex:C05', 'amex:C02',
 ]);
 
 function inferDisputeNetwork(dispute) {
@@ -41,6 +48,7 @@ function inferDisputeNetwork(dispute) {
   const c = String(dispute?.network_reason_code || '').trim();
   if (/^\d{2}\.\d/.test(c)) return 'visa';
   if (/^4\d{3}$/.test(c)) return 'mastercard';
+  if (/^[A-Z]\d{2}$/i.test(c)) return 'amex'; // C31, C05, F29 — letter-prefixed
   return '';
 }
 
