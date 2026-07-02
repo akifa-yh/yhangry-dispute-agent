@@ -279,6 +279,45 @@ export async function getDisputeFinancialOutcome(disputeId) {
   };
 }
 
+// All open (needs_response) disputes on both accounts with their Stripe
+// evidence deadlines, soonest first. Stripe's list API has no status filter,
+// so scan the last 120 days and filter client-side — dispute volume is tiny.
+// warning_needs_response = pre-chargeback inquiry, still has a due date.
+export async function getOpenDisputeDeadlines() {
+  const accounts = [
+    { name: 'UK', flag: '🇬🇧', client: getStripeUk() },
+    { name: 'US', flag: '🇺🇸', client: process.env.STRIPE_SECRET_KEY_US ? getStripeUs() : null },
+  ];
+  const gte = Math.floor(Date.now() / 1000) - 120 * 24 * 3600;
+  const open = [];
+  for (const acct of accounts) {
+    if (!acct.client) continue;
+    let starting_after;
+    do {
+      const params = { limit: 100, created: { gte } };
+      if (starting_after) params.starting_after = starting_after;
+      const res = await acct.client.disputes.list(params);
+      for (const d of res.data) {
+        if (d.status !== 'needs_response' && d.status !== 'warning_needs_response') continue;
+        open.push({
+          id: d.id,
+          account: acct.name,
+          flag: acct.flag,
+          status: d.status,
+          amountDisplay: `${d.currency.toUpperCase()} ${(d.amount / 100).toFixed(2)}`,
+          reason: d.network_reason_code || d.reason,
+          dueBy: d.evidence_details?.due_by || null,
+          hasEvidence: Boolean(d.evidence_details?.has_evidence),
+          submissionCount: d.evidence_details?.submission_count ?? 0,
+        });
+      }
+      starting_after = res.has_more ? res.data[res.data.length - 1].id : null;
+    } while (starting_after);
+  }
+  open.sort((a, b) => (a.dueBy ?? Infinity) - (b.dueBy ?? Infinity));
+  return open;
+}
+
 export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
   // Determine which Stripe account owns this dispute (UK or US). Both the
   // file upload AND the disputes.update must use the same client — file IDs
@@ -301,8 +340,12 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
 
   console.log(`[stripe] Uploaded evidence file ${file.id} for dispute ${disputeId} (${account})`);
 
-  // Step 2: Submit evidence
-  await stripeClient.disputes.update(disputeId, {
+  // Step 2: Save evidence as a DRAFT on the dispute. submit:false is
+  // deliberate — a human reviews the draft in the Stripe dashboard and
+  // presses "Submit evidence" there. Stripe does NOT auto-submit drafts,
+  // so until that manual step happens the bank has received nothing.
+  // Callers must never describe this step as "submitted".
+  const updated = await stripeClient.disputes.update(disputeId, {
     evidence: {
       product_description:
         `Private chef dining experience — multi-course meal prepared and served at customer's home. Booking ref: ${booking.order_id}`,
@@ -313,9 +356,9 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
       uncategorized_text: (analysis.suggested_rebuttal_points || []).join('\n\n'),
       uncategorized_file: file.id,
     },
-    submit: false, // Keep false until verified in production
-    // TODO: flip to true when ready to go live
+    submit: false,
   });
 
-  console.log(`[stripe] Evidence submitted (submit=false) for dispute ${disputeId} (${account})`);
+  console.log(`[stripe] Evidence DRAFT saved (submit=false — needs manual submit in dashboard) for dispute ${disputeId} (${account})`);
+  return { account, dueBy: updated.evidence_details?.due_by || null };
 }

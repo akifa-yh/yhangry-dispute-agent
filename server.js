@@ -4,8 +4,8 @@ import express from 'express';
 import pkg from '@slack/bolt';
 const { App, ExpressReceiver } = pkg;
 import { stripe as getStripe } from './integrations/stripe.js';
-import { submitEvidence, getPaymentAuthForDispute, getDisputeRatioReport } from './integrations/stripe.js';
-import { postDisputeRatioReport } from './integrations/slack.js';
+import { submitEvidence, getPaymentAuthForDispute, getDisputeRatioReport, getOpenDisputeDeadlines } from './integrations/stripe.js';
+import { postDisputeRatioReport, postDeadlineAlert } from './integrations/slack.js';
 import { investigateDispute, analyseDispute } from './agent/index.js';
 import {
   analyseExhibits,
@@ -213,12 +213,17 @@ slackApp.action('approve_dispute', async ({ action, ack, body }) => {
       );
     }
 
-    await submitEvidence(dispute.id, state.analysis, state.booking, docxBuffer);
+    const { account, dueBy } = await submitEvidence(dispute.id, state.analysis, state.booking, docxBuffer);
 
     const ts = new Date().toISOString();
+    const deadlineLine = dueBy
+      ? `\n:alarm_clock: *Respond-by deadline: ${new Date(dueBy * 1000).toUTCString()}* — the draft is worthless if nobody presses Submit before then.`
+      : '';
     await updateMessage(
       messageTs || state.message_ts,
-      `✅ Evidence submitted to Stripe at ${ts} (PDF source: ${pdfSource})`
+      `:memo: Evidence DRAFT saved to Stripe at ${ts} (PDF source: ${pdfSource})\n` +
+        `:warning: *NOT yet submitted to the bank.* Open the dispute in the Stripe dashboard (${account.toUpperCase()} account) and press *Submit evidence*.` +
+        deadlineLine
     );
   } catch (err) {
     console.error(`[server] Error approving dispute ${dispute.id}:`, err);
@@ -940,6 +945,25 @@ app.get('/reports/dispute-ratio', async (req, res) => {
     console.log(`[dispute-ratio] posted report for ${report.periodLabel}`);
   } catch (err) {
     console.error('[dispute-ratio] failed:', err.message);
+  }
+});
+
+// Daily evidence-deadline check — hit by cron-job.org every morning.
+// Scans both Stripe accounts for open disputes and posts a Slack alert when
+// any is due within 48h (or has no visible due date). Posts nothing on quiet
+// days. Same optional shared-secret guard as /reports/dispute-ratio.
+app.get('/reports/deadline-check', async (req, res) => {
+  if (process.env.REPORT_CRON_KEY && req.query.key !== process.env.REPORT_CRON_KEY) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  res.json({ status: 'checking' }); // respond fast; scan + post async
+  try {
+    const open = await getOpenDisputeDeadlines();
+    const posted = await postDeadlineAlert(open);
+    console.log(`[deadline-check] ${open.length} open dispute(s); alert posted: ${posted}`);
+  } catch (err) {
+    console.error('[deadline-check] failed:', err.message);
+    await postSlackError(`Deadline check failed: ${err.message}`, { job: 'deadline-check' }).catch(() => {});
   }
 });
 

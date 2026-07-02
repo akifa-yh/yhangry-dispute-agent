@@ -284,8 +284,16 @@ function pickBottomLine(analysis, dispute, booking) {
     };
   }
 
+  // Never build a bank-facing "no/late complaint" claim on a search that
+  // errored. agent/index.js already downgrades deadline_status to
+  // SEARCH_INCOMPLETE in that case; this guard is the backstop for stale
+  // cached analyses or any path that skipped the downgrade.
+  const contactSearchFailed = ['aircall', 'bird', 'conduit'].some(
+    (c) => analysis._search_status?.[c] === 'failed'
+  );
+
   const ec = analysis.earliest_contact;
-  if (analysis.deadline_status === 'LATE_COMPLAINT' && ec?.minutes_relative_to_deadline != null) {
+  if (!contactSearchFailed && analysis.deadline_status === 'LATE_COMPLAINT' && ec?.minutes_relative_to_deadline != null) {
     const mins = Math.abs(ec.minutes_relative_to_deadline);
     const human = mins >= 60 ? `${Math.floor(mins / 60)} HOURS ${mins % 60} MINS` : `${mins} MINUTES`;
     return {
@@ -295,7 +303,7 @@ function pickBottomLine(analysis, dispute, booking) {
     };
   }
 
-  if (analysis.deadline_status === 'NO_COMPLAINT_FOUND') {
+  if (!contactSearchFailed && analysis.deadline_status === 'NO_COMPLAINT_FOUND') {
     return {
       headline: 'NO COMPLAINT LODGED WITHIN T&C WINDOW',
       detail: 'No contact attempts found across Aircall, Bird, or Conduit channels within the complaint window. The cardholder bypassed the merchant\'s complaint process and filed directly with their issuing bank — a procedural failure to comply with the agreed booking terms.',
@@ -661,7 +669,10 @@ function drawCompactTimeline(doc, analysis, dispute, booking) {
       formatTimelineDate(analysis.earliest_contact.timestamp_iso),
       `First complaint contact — ${analysis.earliest_contact.channel || 'unknown'} (${analysis.earliest_contact.type || 'unknown'})`,
     ]);
-  } else if (analysis.deadline_status === 'NO_COMPLAINT_FOUND') {
+  } else if (
+    analysis.deadline_status === 'NO_COMPLAINT_FOUND' &&
+    !['aircall', 'bird', 'conduit'].some((c) => analysis._search_status?.[c] === 'failed')
+  ) {
     rows.push(['—', 'No complaint contact found across any channel within the T&C window']);
   }
 

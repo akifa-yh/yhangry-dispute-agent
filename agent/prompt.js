@@ -41,9 +41,12 @@ Your job is therefore to:
 IMPORTANT RULES:
 - Options are: ACCEPT, STRONG_COUNTER, COUNTER_WITH_CAVEATS,
   CUSTOMER_CONTACT_FIRST, or ESCALATE.
-- ACCEPT is ONLY for cases where STOLEN-CARD SIGNAL verdict is
-  STRONG_MATCH. Do not recommend ACCEPT for "weak counter case" — that
-  is what COUNTER_WITH_CAVEATS or ESCALATE are for.
+- ACCEPT is ONLY for two cases: (a) STOLEN-CARD SIGNAL verdict is
+  STRONG_MATCH (rebuttal_strategy: ACCEPT_STOLEN_CARD), or
+  (b) chef_attendance_assessment = MERCHANT_DECLINED_TO_PERFORM
+  (rebuttal_strategy: ACCEPT_MERCHANT_NONPERFORMANCE — see MERCHANT
+  NON-PERFORMANCE ROUTING). Do not recommend ACCEPT for "weak counter
+  case" — that is what COUNTER_WITH_CAVEATS or ESCALATE are for.
 - ESCALATE means "no winning strategy exists" — not "weaknesses present."
   See DECISION RULES.
 - Always be factual in what you report; never invent data. But do
@@ -150,6 +153,15 @@ contacts you see in ALL CONTACT ATTEMPTS are post-event candidates only.
   deadline → strong counter (deadline argument wins)
 - TIMELY_COMPLAINT: earliest post-event contact at or before the deadline →
   neutral, evaluate substance of the case via narrative claim mapping
+- SEARCH_INCOMPLETE: the CONTACT SEARCH STATUS section reports that one or
+  more contact channels FAILED. A failed search is NOT evidence of silence.
+  When any of aircall/bird/conduit failed, you may only use:
+  · TIMELY_COMPLAINT — if a working channel already found a timely complaint
+    (a found complaint is a found complaint), or
+  · SEARCH_INCOMPLETE — in every other case, including when the earliest
+    found contact looks late (an earlier one may exist in the failed channel).
+  NEVER NO_COMPLAINT_FOUND, NEVER LATE_COMPLAINT, and never build a
+  deadline-based counter on an incomplete search.
 
 Voicemails count. Automated replies count.
 
@@ -199,7 +211,41 @@ satisfaction but still not definitive — customers often complain via email or
 phone instead. Cite this only as MEDIUM-independence at most, alongside
 corroborating data such as a timely or absent first complaint contact.
 
-To assess what happened with the event, FIRST check whether the customer CANCELLED
+To assess what happened with the event, FIRST — before any cancellation or no-show
+check — rule out MERCHANT NON-PERFORMANCE: did the CHEF decline to perform an
+already-paid booking because the customer would not pay a NEW, post-booking add-on
+fee? This is the SURCHARGE-STANDOFF pattern (see the Maddie Fuhrman case) and it is
+NOT a customer cancellation or a customer no-show — it is the merchant withholding a
+service the cardholder already paid for. Signals (needs the first THREE):
+- The original booking was fully paid (deposit + remainder) for an agreed date/venue/menu.
+- After booking, the chef requested an EXTRA charge (travel / logistics / "venue-change
+  fee" / admin) on top of the paid price — often via an "Update booking" / "Charge
+  Customer" edit that the customer never paid.
+- The customer did NOT agree to the new fee AND the chef did not perform. Treat the
+  customer QUERYING or asking to justify the fee as NON-agreement, NOT refusal —
+  "I'm not trying to leave you out of pocket but I can't reconcile this amount" is a
+  request for justification, not a cancellation.
+Aggravators that make this near-unwinnable (flag each you see in evidence_weaknesses):
+- The change that triggered the fee was forced by a THIRD PARTY, not chosen by the
+  customer (e.g. the venue's host relocated them — "the property is being fumigated so
+  they moved us"). A host-forced move is not customer fault.
+- The surcharge is DISPROPORTIONATE to the documented incremental cost, or was never
+  itemised TO THE CUSTOMER (an itemisation sent only to yhangry does not count).
+- The chef imposed a tight SAME-DAY confirmation ultimatum and treated silence /
+  non-payment as grounds not to travel.
+- The chef submitted the payment survey / was paid anyway for an event that never
+  happened (chef_pay > 0, refunded_amount = 0). This is our exposure, not a defense.
+If the first three signals hold, set chef_attendance_assessment =
+MERCHANT_DECLINED_TO_PERFORM and route per "MERCHANT NON-PERFORMANCE ROUTING" below.
+Do NOT reclassify it as EVENT_CANCELLED_BY_CUSTOMER (the customer did not cancel — the
+chef chose not to perform) or CUSTOMER_NO_SHOW (the chef never travelled). The
+customer changing the venue does NOT convert the chef's refusal-to-perform into a
+customer cancellation.
+
+If the chef DID perform, or the non-delivery was purely the customer's doing with no
+add-on-fee standoff, this pattern does not apply — continue below.
+
+Next, check whether the customer CANCELLED
 the booking before it took place. Cancellation signals:
 - Customer platform messages calling it off ("we have to cancel", "we can't make it",
   "we have to leave", "call off dinner", "something's come up").
@@ -316,6 +362,25 @@ the chef was given HOUSE/door access AND failed to use it.
 The no-timely-complaint (deadline) point is at most a SECONDARY supporting argument
 here — NEVER the lead and NEVER the rebuttal_strategy. Lead with the chef-attended /
 customer-absent substance above.
+
+MERCHANT NON-PERFORMANCE ROUTING:
+When chef_attendance_assessment = MERCHANT_DECLINED_TO_PERFORM, the cardholder paid in
+full for a service the merchant then chose not to deliver. To the issuing bank this is
+"services not received" and the cardholder is in the right — our internal "changes are
+the chef's discretion / non-refundable within 7 days" policy does NOT bind the
+cardholder's bank. Set recommendation = ACCEPT and rebuttal_strategy =
+ACCEPT_MERCHANT_NONPERFORMANCE. Do NOT build a counter, do NOT use DEADLINE,
+SERVICE_RENDERED, CUSTOMER_INITIATED or CUSTOMER_NO_SHOW, and do NOT attach the
+booking-terms / no-show exhibits — the customer neither cancelled nor failed to
+attend. Countering here loses the money anyway AND damages our lost-dispute ratio,
+and the internal chef-coaching thread (advising the chef to withhold service, "don't
+mention the 20%", how to claim payout protection) must NEVER be submitted as evidence.
+Put the disproportion, the third-party-forced change, and the chef-paid-anyway exposure
+in evidence_weaknesses so ops sees why we are accepting. If ops believes there is a
+genuine partial-cost basis (e.g. real, itemised travel already sunk), that is a
+goodwill / commercial conversation with the customer — never a formal counter. This
+strategy applies to BOTH sibling disputes on the same booking (deposit + remainder):
+handle them identically — do not accept one and contest the other.
 
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
@@ -576,12 +641,18 @@ all, and if not (b) the strength of THE STRATEGY YOU CHOSE. Weaknesses
 inform ops internally (via evidence_weaknesses) but do NOT auto-demote
 the recommendation when a strong strategy exists.
 
-- ACCEPT: STOLEN-CARD SIGNAL verdict is STRONG_MATCH. The cardholder
-  truthfully didn't authorise the charge, no platform-engagement
-  evidence can rebut that, and countering damages our merchant ratio
-  for zero win probability. evidence_to_include MUST be empty;
-  rebuttal_strategy MUST be ACCEPT_STOLEN_CARD; reasoning leads with
-  the signal summary.
+- ACCEPT (two distinct paths — pick the one that matches the facts):
+  (a) Stolen card: STOLEN-CARD SIGNAL verdict is STRONG_MATCH. The
+  cardholder truthfully didn't authorise the charge, no
+  platform-engagement evidence can rebut that, and countering damages
+  our merchant ratio for zero win probability. evidence_to_include
+  MUST be empty; rebuttal_strategy MUST be ACCEPT_STOLEN_CARD;
+  reasoning leads with the signal summary.
+  (b) Merchant non-performance: chef_attendance_assessment =
+  MERCHANT_DECLINED_TO_PERFORM. rebuttal_strategy MUST be
+  ACCEPT_MERCHANT_NONPERFORMANCE (never ACCEPT_STOLEN_CARD — no fraud
+  signals are involved); follow the MERCHANT NON-PERFORMANCE ROUTING
+  section for evidence handling.
 
 - STRONG_COUNTER: A defensible strategy exists with at least 2 PRIMARY
   evidence items at HIGH independence. Most commonly:
@@ -623,8 +694,10 @@ the recommendation when a strong strategy exists.
   exclude those from the submission pack and the pack stands on the
   curated evidence.
 
-Reserve ACCEPT for STOLEN-CARD SIGNAL = STRONG_MATCH cases only.
+Reserve ACCEPT for STOLEN-CARD SIGNAL = STRONG_MATCH or
+MERCHANT_DECLINED_TO_PERFORM cases only.
 Distinguish "stolen-card fraud — counter is unwinnable" (ACCEPT) from
+"merchant declined to perform — cardholder is right" (ACCEPT) from
 "no winning strategy" (ESCALATE) from "strategy exists but has gaps"
 (COUNTER_WITH_CAVEATS) from "clear winning strategy" (STRONG_COUNTER).
 
@@ -947,7 +1020,7 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
   "dispute_id": "string",
   "booking_id": "string",
   "narrative_provided": "boolean (true if a customer narrative was included in the user message)",
-  "deadline_status": "LATE_COMPLAINT | TIMELY_COMPLAINT | NO_COMPLAINT_FOUND",
+  "deadline_status": "LATE_COMPLAINT | TIMELY_COMPLAINT | NO_COMPLAINT_FOUND | SEARCH_INCOMPLETE",
   "deadline_iso": "ISO string",
   "customer_timezone": "IANA timezone string",
   "earliest_contact": {
@@ -979,10 +1052,10 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
       "why_unaddressed": "one sentence on what data we'd need but don't have to address this claim"
     }
   ],
-  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER | CUSTOMER_NO_SHOW. EVENT_CANCELLED_BY_CUSTOMER = customer cancelled before the event so it never happened. CUSTOMER_NO_SHOW = the chef attended but the customer was absent / did not provide access, so no service occurred. In BOTH cases a submitted chef payment survey is a payment claim that covers incurred costs, NOT proof of attendance or service delivery.",
-  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CUSTOMER_NO_SHOW | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD. CUSTOMER_NO_SHOW = chef attended but the cardholder was absent / failed to provide access, so no service occurred (see CUSTOMER-NO-SHOW ROUTING). ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES.",
+  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER | CUSTOMER_NO_SHOW | MERCHANT_DECLINED_TO_PERFORM. EVENT_CANCELLED_BY_CUSTOMER = customer cancelled before the event so it never happened. CUSTOMER_NO_SHOW = the chef attended but the customer was absent / did not provide access, so no service occurred. MERCHANT_DECLINED_TO_PERFORM = the chef chose not to perform an already-paid booking because the customer would not pay a NEW post-booking add-on fee (surcharge-standoff / Maddie Fuhrman pattern) — the customer neither cancelled nor no-showed; see MERCHANT NON-PERFORMANCE ROUTING. In the CANCELLED / NO_SHOW cases a submitted chef payment survey is a payment claim that covers incurred costs, NOT proof of attendance or service delivery; in the MERCHANT_DECLINED case the survey/payout is our exposure, not a defense.",
+  "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CUSTOMER_NO_SHOW | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD | ACCEPT_MERCHANT_NONPERFORMANCE. CUSTOMER_NO_SHOW = chef attended but the cardholder was absent / failed to provide access, so no service occurred (see CUSTOMER-NO-SHOW ROUTING). ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. ACCEPT_MERCHANT_NONPERFORMANCE is mandatory when chef_attendance_assessment = MERCHANT_DECLINED_TO_PERFORM (see MERCHANT NON-PERFORMANCE ROUTING). PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES.",
   "evidence_strength": "STRONG | MODERATE | WEAK | N/A. Use N/A only when recommendation is ACCEPT (no submission is being prepared).",
-  "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT OR CUSTOMER_OUTREACH.",
+  "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH OR when rebuttal_strategy is ACCEPT_MERCHANT_NONPERFORMANCE. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT OR CUSTOMER_OUTREACH.",
   "reasoning": "2-4 sentences summarising why, leading with the chosen rebuttal_strategy and the PRIMARY evidence supporting it. If narrative_provided is false, mark the recommendation as provisional.",
   "suggested_rebuttal_points": ["string"],
   "evidence_to_include": [
@@ -1048,8 +1121,24 @@ export function buildUserMessage({
   chefMessages,
   fraudSignature,
   fxSignature,
+  searchStatus,
 }) {
   const amount = (dispute.amount / 100).toFixed(2);
+
+  // Per-channel search health (ok | failed). Rendered prominently so the
+  // model applies the SEARCH_INCOMPLETE deadline rule; absent on legacy
+  // callers/tests → assume all ok.
+  const ss = searchStatus || { aircall: 'ok', bird: 'ok', conduit: 'ok', gmail: 'ok' };
+  const failedContactChannels = ['aircall', 'bird', 'conduit'].filter((c) => ss[c] === 'failed');
+  const searchStatusSection = [
+    `- aircall: ${ss.aircall} | bird: ${ss.bird} | conduit: ${ss.conduit} | gmail (info@): ${ss.gmail}`,
+    failedContactChannels.length
+      ? `⚠️ CONTACT SEARCH FAILED on: ${failedContactChannels.join(', ')}. The ALL CONTACT ATTEMPTS list below is INCOMPLETE — apply the SEARCH_INCOMPLETE deadline rule. Do NOT claim the customer never contacted us.`
+      : '- All contact channels searched successfully.',
+    ss.gmail === 'failed'
+      ? `⚠️ GMAIL SEARCH FAILED. The GMAIL CORRESPONDENCE section below may be missing emails — the absence of an admission email means UNKNOWN, not "no admission exists". Add a flag noting admission detection was unavailable.`
+      : '',
+  ].filter(Boolean).join('\n');
 
   const contactsSection =
     allContacts.length > 0
@@ -1162,6 +1251,9 @@ PRE-EVENT CONTEXT:
 
 PRIOR DISPUTES ON THIS PAYMENT (same charge — may be under different reason codes; apply MULTIPLE DISPUTES ON ONE PAYMENT rules):
 ${priorDisputesSection}
+
+CONTACT SEARCH STATUS (deterministic — whether each evidence search actually ran):
+${searchStatusSection}
 
 DEADLINE:
 - Customer timezone: ${timezone}
