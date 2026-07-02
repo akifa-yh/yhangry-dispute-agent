@@ -276,6 +276,16 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     summaryLines.push(`*Rebuttal strategy:* ${analysis.rebuttal_strategy.replace(/_/g, ' ')}`);
   }
   summaryLines.push(`*Dispute ID:* ${analysis.dispute_id}`);
+  // Stripe's real respond-by deadline (evidence_details.due_by). Present on
+  // webhook-delivered and hydrated disputes; absent on stripped button
+  // payloads — render only when known rather than guessing.
+  const dueBySec = dispute.evidence_details?.due_by;
+  if (dueBySec) {
+    const daysLeft = Math.max(0, Math.floor((dueBySec * 1000 - Date.now()) / 86400000));
+    summaryLines.push(
+      `*Stripe respond-by:* :alarm_clock: ${new Date(dueBySec * 1000).toUTCString()} (${daysLeft} day${daysLeft === 1 ? '' : 's'} left)`
+    );
+  }
   const bookingIdForLink = booking.order_id || analysis.booking_id;
   summaryLines.push(
     `*Booking:* <https://yhangry.com/nova/resources/orders/${bookingIdForLink}|#${bookingIdForLink}>`

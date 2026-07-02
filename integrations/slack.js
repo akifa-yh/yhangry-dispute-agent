@@ -621,6 +621,53 @@ export async function postDisputeRatioReport(report) {
   });
 }
 
+// Daily evidence-deadline alert (hit by cron via /reports/deadline-check).
+// Posts ONLY when something needs attention: any open dispute due within
+// `urgentHours`, or one with no due date at all. Quiet days post nothing —
+// an everyday "all fine" message would train ops to ignore the alert.
+export async function postDeadlineAlert(openDisputes, urgentHours = 48) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const urgent = openDisputes.filter(
+    (d) => d.dueBy !== null && d.dueBy - nowSec <= urgentHours * 3600
+  );
+  const noDate = openDisputes.filter((d) => d.dueBy === null);
+  if (!urgent.length && !noDate.length) return false;
+
+  const line = (d) => {
+    const hoursLeft = d.dueBy ? Math.max(0, Math.round((d.dueBy - nowSec) / 3600)) : null;
+    const when = d.dueBy
+      ? `due *${new Date(d.dueBy * 1000).toUTCString()}* (~${hoursLeft}h left)`
+      : 'no due date on Stripe — check manually';
+    const evidence = d.hasEvidence
+      ? d.submissionCount > 0
+        ? ':white_check_mark: submitted'
+        : ':memo: DRAFT saved, *not submitted*'
+      : ':x: no evidence saved';
+    return `${d.flag} \`${d.id}\` — ${d.amountDisplay} · ${d.reason} · ${when} · ${evidence}`;
+  };
+
+  const sections = [];
+  if (urgent.length) {
+    sections.push(
+      `:rotating_light: *${urgent.length} dispute${urgent.length > 1 ? 's' : ''} due within ${urgentHours}h:*\n` +
+        urgent.map(line).join('\n')
+    );
+  }
+  if (noDate.length) {
+    sections.push(`:grey_question: *Open with no visible deadline:*\n` + noDate.map(line).join('\n'));
+  }
+  sections.push(
+    `_Anything marked "DRAFT saved, not submitted" loses by default at the deadline — open the dispute in the Stripe dashboard and press *Submit evidence*._`
+  );
+
+  await web().chat.postMessage({
+    channel: channelId(),
+    text: `Dispute evidence deadlines: ${urgent.length} urgent`,
+    blocks: sections.map((s) => ({ type: 'section', text: { type: 'mrkdwn', text: s } })),
+  });
+  return true;
+}
+
 export async function postError(text, metadata = {}, nextSteps = null, retryDisputeId = null) {
   const metaStr = Object.entries(metadata)
     .map(([k, v]) => `${k}: ${v}`)
