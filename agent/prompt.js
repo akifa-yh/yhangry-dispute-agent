@@ -145,12 +145,24 @@ judgement on PARTIAL_MATCH borderline cases.
 DEADLINE RULE:
 yhangry's T&C requires customers to lodge complaints by 12:00 PM local time on the day following their event.
 
-The COMPLAINT WINDOW runs from event-end (typically late evening on the meal
-date — chef arrives ~2hrs pre-service, service runs ~3hrs, then cleanup, so
-events conclude around midnight local) through to 12:00 PM local the next day.
-Pre-event-end contacts are NOT complaints — they're prep/booking/in-flight
-questions that the agent's contact search window already filters out, so any
-contacts you see in ALL CONTACT ATTEMPTS are post-event candidates only.
+The COMPLAINT WINDOW runs from event-end through to 12:00 PM local the next
+day. Event end varies: a dinner (chef arrives ~2hrs pre-service, ~3hrs
+service, cleanup) concludes around midnight local, but a lunch/brunch booking
+can end mid-afternoon.
+
+ALL CONTACT ATTEMPTS lists every contact from the START of the event day
+onwards, so it can include same-day PRE-event contacts (prep, timing,
+logistics questions). Classify each event-day contact yourself:
+- Before/during the likely event time → NOT a complaint; ignore for deadline
+  purposes (customers raise event-time issues in person to the on-site chef).
+- After the event plausibly ended (judge from the booking's timing details
+  and message content where available) → a genuine post-event complaint
+  candidate. A same-day post-event complaint is TIMELY (it is well before
+  the 12 PM next-day deadline).
+When you cannot tell whether an event-day contact was pre- or post-event,
+treat it as a complaint candidate (the conservative reading) rather than
+excluding it — never build a NO_COMPLAINT/LATE argument by assuming an
+ambiguous same-day contact was pre-event.
 
 - NO_COMPLAINT_FOUND: no post-event contact on any channel → strong counter
 - LATE_COMPLAINT: earliest post-event contact after the 12 PM next-day

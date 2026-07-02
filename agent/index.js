@@ -194,25 +194,22 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     eventDateStr
   );
 
-  // Step 3: Contact-search window. The yhangry complaint window starts AFTER
-  // the event ends (per yhangry T&Cs). A typical dinner booking runs:
-  //   - chef arrives ~2 hours before service start (~6 PM for an 8 PM dinner)
-  //   - service runs ~3 hours
-  //   - cleanup + chef departure pushes total event end to ~midnight local
-  // So contacts from before the event concluded are essentially always
-  // prep/booking/in-flight questions, not complaints — customers raise
-  // event-time issues IN PERSON to the on-site chef, not via yhangry support.
-  // We use end-of-event-day local (= start of the day after the meal date in
-  // the customer's timezone, i.e. midnight) as the floor. This conservatively
-  // captures the genuine complaint window (post-event through 12 PM next-day
-  // deadline + after) and excludes the noisy pre-event same-day contacts that
-  // would otherwise be mis-tagged as "first complaint contact".
+  // Step 3: Contact-search window. Starts at the BEGINNING of the event day
+  // (local midnight), so same-day contacts are captured. The old floor was
+  // midnight AFTER the event day — built for dinners that end ~midnight — but
+  // it made same-day post-event complaints structurally invisible: a lunch
+  // booking ending 3 PM with a furious 5 PM call, or an 11:30 PM same-night
+  // complaint, read as NO_COMPLAINT_FOUND and produced a false "the
+  // cardholder never contacted us" deadline counter (GAN review 2026-07-02).
+  // The cost is same-day PRE-event noise (prep/logistics contacts) re-entering
+  // the list; the prompt's DEADLINE RULE now instructs the model to classify
+  // event-day contacts by time-of-day and content instead of assuming every
+  // listed contact is post-event.
   const searchWindowStart = DateTime.fromISO(eventDateStr, { zone: timezone })
-    .plus({ days: 1 })
     .startOf('day');
   const eventDateUnix = Math.floor(searchWindowStart.toMillis() / 1000);
   const eventDateIso = searchWindowStart.toISO();
-  console.log(`[agent] Contact search window: from ${eventDateIso} (${timezone}) — i.e. post-event-end`);
+  console.log(`[agent] Contact search window: from ${eventDateIso} (${timezone}) — start of event day; prompt classifies same-day contacts`);
 
   // Step 4: Normalise phone for external lookups (postcode disambiguates country)
   const customerPhone = normalisePhoneForLookup(booking.customer_phone, booking.address_postcode);
