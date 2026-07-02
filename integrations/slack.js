@@ -429,19 +429,29 @@ export async function fetchLatestEvidencePdfFromThread({ channelId, threadTs }) 
     return null;
   }
 
-  // Walk newest → oldest to find the most recent PDF attachment. Slack
-  // returns thread replies in chronological order (oldest first), so we
-  // iterate from the end.
+  // Walk newest → oldest to find the most recent BOT-BUILT evidence PDF.
+  // Slack returns thread replies in chronological order (oldest first), so
+  // we iterate from the end. Only PDFs whose filename matches the
+  // uploadEvidencePdf pattern ("Merchant Response — <name>.pdf") qualify:
+  // ops drop all sorts of reference PDFs into dispute threads (the
+  // customer's VROL questionnaire, bank letters, invoices), and accepting
+  // any thread PDF meant Approve could submit the cardholder's own dispute
+  // paperwork to Stripe as our evidence (GAN review 2026-07-02).
   let chosen = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     const files = m.files || [];
     for (const f of files) {
       const ext = (f.filetype || '').toLowerCase();
-      const name = (f.name || f.title || '').toLowerCase();
-      if (ext === 'pdf' || name.endsWith('.pdf')) {
+      const name = f.name || f.title || '';
+      const isPdf = ext === 'pdf' || name.toLowerCase().endsWith('.pdf');
+      const isMerchantResponse = /^merchant response/i.test(name.trim());
+      if (isPdf && isMerchantResponse) {
         chosen = { file: f, posted_at: Number(m.ts) || 0 };
         break;
+      }
+      if (isPdf && !isMerchantResponse) {
+        console.log(`[slack] Skipping non-evidence PDF in thread: "${name}" (not a Merchant Response file)`);
       }
     }
     if (chosen) break;
