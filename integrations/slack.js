@@ -1017,6 +1017,38 @@ function _capLines(lines, max = 15) {
   return [...lines.slice(0, max), `_…and ${lines.length - max} more_`];
 }
 
+// Stacked-bar chart of the cohort table, rendered by quickchart.io (Slack
+// image blocks need a public URL and Render can't rasterise images itself).
+// Sends ONLY the monthly aggregate amounts — no customer data — a trade-off
+// Aki approved 2026-07-07. Returns null if the URL would exceed Slack's
+// 3000-char limit for image block URLs (charts then silently degrade to
+// table-only rather than killing the post).
+function _cohortChartUrl(a) {
+  const symbol = a.currency === 'gbp' ? '£' : a.currency === 'usd' ? '$' : '';
+  const major = (cents) => Math.round(cents) / 100;
+  const cfg = {
+    type: 'bar',
+    data: {
+      labels: a.cohorts.map((c) => _cohortLabel(c.month)),
+      datasets: [
+        { label: 'Won', data: a.cohorts.map((c) => major(c.wonAmount)), backgroundColor: '#2f9e5f' },
+        { label: 'Lost', data: a.cohorts.map((c) => major(c.lostAmount)), backgroundColor: '#d64545' },
+        { label: 'Pending', data: a.cohorts.map((c) => major(c.pendingAmount)), backgroundColor: '#e8a13c' },
+      ],
+    },
+    options: {
+      title: { display: true, text: `${a.name} — ${symbol} disputed by month filed, coloured by status today` },
+      legend: { position: 'top' },
+      scales: {
+        xAxes: [{ stacked: true }],
+        yAxes: [{ stacked: true, ticks: { beginAtZero: true } }],
+      },
+    },
+  };
+  const url = `https://quickchart.io/chart?w=720&h=380&bkg=white&c=${encodeURIComponent(JSON.stringify(cfg))}`;
+  return url.length <= 3000 ? url : null;
+}
+
 export async function postWeeklyDisputeRecap(recap) {
   const lines = [`:mailbox_with_mail: *Weekly Disputes — ${recap.periodLabel}*`];
 
@@ -1119,6 +1151,14 @@ export async function postMonthlyDisputeRecap(recap) {
         `*6-month scorecard:* ${s.decided} decided → ${s.won} won (${winRate}%) · ` +
         `recovered ${money(s.wonAmount)} · lost ${money(s.lostAmount)} · fees ${money(s.feesPaid)}`;
       blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${table}\n${scorecard}` } });
+      const chartUrl = _cohortChartUrl(a);
+      if (chartUrl) {
+        blocks.push({
+          type: 'image',
+          image_url: chartUrl,
+          alt_text: `${a.name} disputes by month filed, stacked by current status`,
+        });
+      }
     }
     blocks.push({ type: 'divider' });
   }
@@ -1137,9 +1177,14 @@ export async function postMonthlyDisputeRecap(recap) {
     ],
   });
 
-  await web().chat.postMessage({
-    channel: recapChannelId(),
-    text: `Monthly Disputes — ${recap.periodLabel}`,
-    blocks,
-  });
+  // Slack validates image_url at post time — if quickchart.io is down or
+  // slow the whole message gets rejected. The chart is decoration; the
+  // numbers must land regardless, so retry once without the image blocks.
+  const msg = { channel: recapChannelId(), text: `Monthly Disputes — ${recap.periodLabel}`, blocks };
+  try {
+    await web().chat.postMessage(msg);
+  } catch (err) {
+    console.warn(`[recap] Monthly post failed (${err.message}) — retrying without charts`);
+    await web().chat.postMessage({ ...msg, blocks: blocks.filter((b) => b.type !== 'image') });
+  }
 }
