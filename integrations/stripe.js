@@ -407,11 +407,20 @@ async function _disputeCustomerName(client, dispute) {
   }
 }
 
-// Disputes that got a final verdict inside the window, via the events API
-// (charge.dispute.closed) — the dispute object itself has no closed-at
-// field. Stripe retains events ~30 days, which covers both the weekly and
-// the monthly window. Statuses other than won/lost (e.g. warning_closed =
-// inquiry withdrawn before becoming a chargeback) are reported separately.
+// Final statuses a dispute can close with. warning_closed = inquiry
+// resolved without ever becoming a chargeback (money never moved);
+// charge_refunded = we refunded to end it (the accept-inside-EFW-window
+// playbook). Buckets must be exhaustive so cohort columns sum to "Filed".
+const _FINAL_STATUSES = new Set(['won', 'lost', 'charge_refunded', 'warning_closed']);
+const _isWonOutcome = (d) => d.status === 'won' || d.status === 'warning_closed';
+const _isLostOutcome = (d) => d.status === 'lost' || d.status === 'charge_refunded';
+
+// FALLBACK source for "verdicts landed in window": the events API
+// (charge.dispute.closed). Stripe only retains events ~30 days, so a
+// 31-day monthly window can silently miss day-one verdicts — which is why
+// the dispute.closed webhook stamps metadata.closed_at (durable) and that
+// stamp is preferred whenever present. This path only covers disputes
+// closed before stamping shipped (2026-07-07).
 async function _decidedInWindow(client, gte, lt) {
   const decided = [];
   let starting_after;
@@ -444,7 +453,11 @@ function _sumFees(disputes) {
 // Recap for one account. `windowGte`/`windowLt` bound "new" and "decided";
 // `cohortGte` bounds the monthly cohort table (null for the weekly recap).
 async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
-  const scanGte = cohortGte ?? windowGte - 365 * 24 * 3600; // open-dispute scan window
+  // Open-dispute scan always looks back a full year even when the cohort
+  // table only needs 6 months — otherwise a still-pending 7-month-old
+  // dispute would show in the weekly "awaiting verdict" total but vanish
+  // from the monthly one, and the two reports would contradict each other.
+  const scanGte = Math.min(cohortGte ?? Infinity, windowGte - 365 * 24 * 3600);
   const [allDisputes, decidedRaw] = await Promise.all([
     _listDisputesSince(client, Math.min(scanGte, windowGte)),
     _decidedInWindow(client, windowGte, windowLt),
@@ -464,9 +477,25 @@ async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
     });
   }
 
-  const decided = [];
+  // Verdicts landed in the window. Primary source: the metadata.closed_at
+  // stamp written by the dispute.closed webhook (durable, exact). Fallback:
+  // charge.dispute.closed events, for disputes closed before stamping
+  // shipped. A stamped dispute is never double-counted from the event
+  // stream — the stamp is authoritative for which window it belongs to.
+  const decidedMap = new Map();
+  for (const d of allDisputes) {
+    const ts = Number(d.metadata?.closed_at || 0);
+    if (ts >= windowGte && ts < windowLt && _FINAL_STATUSES.has(d.status)) {
+      decidedMap.set(d.id, d);
+    }
+  }
+  const stamped = new Set(allDisputes.filter((d) => d.metadata?.closed_at).map((d) => d.id));
   for (const d of decidedRaw) {
-    if (d.status !== 'won' && d.status !== 'lost') continue;
+    if (stamped.has(d.id) || decidedMap.has(d.id)) continue;
+    if (_FINAL_STATUSES.has(d.status)) decidedMap.set(d.id, d);
+  }
+  const decided = [];
+  for (const d of decidedMap.values()) {
     decided.push({
       id: d.id,
       status: d.status,
@@ -483,8 +512,8 @@ async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
     newDisputes,
     newAmount: _sumAmount(newDisputes.map((n) => ({ amount: n.amount }))),
     decided,
-    won: decided.filter((d) => d.status === 'won'),
-    lost: decided.filter((d) => d.status === 'lost'),
+    won: decided.filter(_isWonOutcome),
+    lost: decided.filter(_isLostOutcome),
     openCount: open.length,
     openAmount: _sumAmount(open),
   };
@@ -503,7 +532,10 @@ async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
       byMonth.set(`${y}-${String(m + 1).padStart(2, '0')}`, []);
     }
     for (const d of allDisputes) {
-      if (d.created < cohortGte) continue;
+      // Upper bound matters: a dispute filed after month-end but before the
+      // cron fires would otherwise leak a partial current-month row into
+      // the table and the scorecard.
+      if (d.created < cohortGte || d.created >= windowLt) continue;
       const dt = new Date(d.created * 1000);
       const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
       if (!byMonth.has(key)) byMonth.set(key, []);
@@ -511,9 +543,11 @@ async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
     }
     recap.cohorts = [...byMonth.keys()].sort().map((key) => {
       const ds = byMonth.get(key);
-      const won = ds.filter((d) => d.status === 'won');
-      const lost = ds.filter((d) => d.status === 'lost');
-      const pending = ds.filter((d) => _PENDING_STATUSES.has(d.status));
+      const won = ds.filter(_isWonOutcome);
+      const lost = ds.filter(_isLostOutcome);
+      // Remainder, not a status allowlist — guarantees Won+Lost+Pending
+      // always sums to Filed even if Stripe grows a new status.
+      const pending = ds.filter((d) => !_isWonOutcome(d) && !_isLostOutcome(d));
       return {
         month: key,
         filed: ds.length,
@@ -528,10 +562,10 @@ async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
     });
     const cohortDisputes = [...byMonth.values()].flat();
     recap.scorecard = {
-      decided: cohortDisputes.filter((d) => d.status === 'won' || d.status === 'lost').length,
-      won: cohortDisputes.filter((d) => d.status === 'won').length,
-      wonAmount: _sumAmount(cohortDisputes.filter((d) => d.status === 'won')),
-      lostAmount: _sumAmount(cohortDisputes.filter((d) => d.status === 'lost')),
+      decided: cohortDisputes.filter((d) => _isWonOutcome(d) || _isLostOutcome(d)).length,
+      won: cohortDisputes.filter(_isWonOutcome).length,
+      wonAmount: _sumAmount(cohortDisputes.filter(_isWonOutcome)),
+      lostAmount: _sumAmount(cohortDisputes.filter(_isLostOutcome)),
       feesPaid: _sumFees(cohortDisputes),
     };
   }

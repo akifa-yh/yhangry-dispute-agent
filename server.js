@@ -982,6 +982,27 @@ async function handleDisputeClosed(dispute) {
   // helper to ensure we have the latest financial picture.
   const outcome = await getDisputeFinancialOutcome(dispute.id);
 
+  // Durably stamp the decision time onto the dispute itself. The weekly/
+  // monthly recaps need "verdicts landed in this window", but the dispute
+  // object has no closed-at field and Stripe's events API only retains
+  // ~30 days — too short for a 31-day month. Metadata survives forever.
+  // Non-fatal: the recap falls back to the events API when the stamp is
+  // missing (disputes closed before this shipped, 2026-07-07).
+  try {
+    const { stripe: getUk, getStripeUs: getUs } = await import('./integrations/stripe.js');
+    const client = outcome.account === 'us' ? getUs() : getUk();
+    await client.disputes.update(dispute.id, {
+      metadata: {
+        closed_at: String(Math.floor(Date.now() / 1000)),
+        final_status: outcome.formalStatus,
+      },
+    });
+  } catch (err) {
+    console.warn(
+      `[webhook-closed] Could not stamp closed_at metadata for ${dispute.id} (non-fatal): ${err.message}`
+    );
+  }
+
   // Best-effort booking lookup for the customer-name display. Won't always
   // work (gift-card disputes have no BigQuery booking, see #18 Phase 2) —
   // fall back to "unknown customer" in that case.

@@ -995,9 +995,26 @@ function _newDisputeLine(n) {
 
 function _decidedLine(d) {
   const who = d.name ? ` — ${d.name}` : '';
-  return d.status === 'won'
-    ? `• :white_check_mark: WON ${_fmtMoney(d.amount, d.currency)} back${who}`
-    : `• :x: LOST ${_fmtMoney(d.amount, d.currency)}${who}`;
+  const amt = _fmtMoney(d.amount, d.currency);
+  switch (d.status) {
+    case 'won':
+      return `• :white_check_mark: WON ${amt} back${who}`;
+    case 'lost':
+      return `• :x: LOST ${amt}${who}`;
+    case 'charge_refunded':
+      return `• :leftwards_arrow_with_hook: ACCEPTED ${amt} (refunded)${who}`;
+    case 'warning_closed':
+      return `• :shield: Inquiry closed, no chargeback — ${amt}${who}`;
+    default:
+      return `• ${d.status.toUpperCase()} ${amt}${who}`;
+  }
+}
+
+// Slack rejects section blocks over 3000 chars, so a fraud-attack week or
+// a heavy month must not list every dispute — cap and summarise the rest.
+function _capLines(lines, max = 15) {
+  if (lines.length <= max) return lines;
+  return [...lines.slice(0, max), `_…and ${lines.length - max} more_`];
 }
 
 export async function postWeeklyDisputeRecap(recap) {
@@ -1009,14 +1026,14 @@ export async function postWeeklyDisputeRecap(recap) {
     } else {
       lines.push(
         `${a.flag} *${a.name} — ${a.newDisputes.length} new · ${_fmtMoney(a.newAmount, a.currency)}*`,
-        ...a.newDisputes.map(_newDisputeLine)
+        ..._capLines(a.newDisputes.map(_newDisputeLine))
       );
     }
   }
 
   const allDecided = recap.accounts.flatMap((a) => a.decided);
   if (allDecided.length) {
-    lines.push(`:scales: *Decided this week:*`, ...allDecided.map(_decidedLine));
+    lines.push(`:scales: *Decided this week:*`, ..._capLines(allDecided.map(_decidedLine)));
   }
 
   const openBits = recap.accounts.map((a) =>
@@ -1036,7 +1053,7 @@ export async function postWeeklyDisputeRecap(recap) {
         elements: [
           {
             type: 'mrkdwn',
-            text: ':information_source: Money on open disputes is already withheld by the bank — it comes back only if we win. Verdicts typically take 1–3 months.',
+            text: ':information_source: Money on open chargebacks is already withheld by the bank — it comes back only if we win (early-warning inquiries haven’t moved money yet). Verdicts typically take 1–3 months.',
           },
         ],
       },
@@ -1057,10 +1074,10 @@ export async function postMonthlyDisputeRecap(recap) {
       a.newDisputes.length === 0
         ? `*Filed in ${recap.periodLabel.split(' ')[0]}:* none :white_check_mark:`
         : `*Filed in ${recap.periodLabel.split(' ')[0]}:* ${a.newDisputes.length} · ${_fmtMoney(a.newAmount, a.currency)}\n` +
-          a.newDisputes.map(_newDisputeLine).join('\n');
+          _capLines(a.newDisputes.map(_newDisputeLine)).join('\n');
 
     const decidedLine = a.decided.length
-      ? `*Verdicts landed (any month's dispute):*\n` + a.decided.map(_decidedLine).join('\n')
+      ? `*Verdicts landed (any month's dispute):*\n` + _capLines(a.decided.map(_decidedLine)).join('\n')
       : `*Verdicts landed:* none`;
 
     const openLine = a.openCount
@@ -1113,7 +1130,8 @@ export async function postMonthlyDisputeRecap(recap) {
         type: 'mrkdwn',
         text:
           ':information_source: Disputes are grouped by the month they were *filed*; a verdict that lands later updates that same row. ' +
-          '"Pending" money is already withheld by the bank and returns only on a win. ' +
+          '"Won" includes inquiries closed without a chargeback; "Lost" includes disputes we chose to accept and refund. ' +
+          '"Pending" chargeback money is already withheld by the bank and returns only on a win (inquiries haven’t moved money yet). ' +
           'The Stripe dispute fee ($15 / £20) is non-refundable even when we win.',
       },
     ],
