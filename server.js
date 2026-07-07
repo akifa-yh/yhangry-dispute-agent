@@ -4,8 +4,8 @@ import express from 'express';
 import pkg from '@slack/bolt';
 const { App, ExpressReceiver } = pkg;
 import { stripe as getStripe } from './integrations/stripe.js';
-import { submitEvidence, getPaymentAuthForDispute, getDisputeRatioReport, getOpenDisputeDeadlines } from './integrations/stripe.js';
-import { postDisputeRatioReport, postDeadlineAlert } from './integrations/slack.js';
+import { submitEvidence, getPaymentAuthForDispute, getDisputeRatioReport, getOpenDisputeDeadlines, getDisputeRecap } from './integrations/stripe.js';
+import { postDisputeRatioReport, postDeadlineAlert, postWeeklyDisputeRecap, postMonthlyDisputeRecap } from './integrations/slack.js';
 import { investigateDispute, analyseDispute } from './agent/index.js';
 import {
   analyseExhibits,
@@ -1048,6 +1048,42 @@ app.get('/reports/deadline-check', async (req, res) => {
   } catch (err) {
     console.error('[deadline-check] failed:', err.message);
     await postSlackError(`Deadline check failed: ${err.message}`, { job: 'deadline-check' }).catch(() => {});
+  }
+});
+
+// Weekly dispute recap — hit by cron-job.org every Monday morning. New
+// disputes / verdicts / money-on-the-line for the trailing 7 days, posted
+// to RECAP_CHANNEL_ID (#y-combinator). Same guard as the other reports.
+app.get('/reports/weekly-recap', async (req, res) => {
+  if (process.env.REPORT_CRON_KEY && req.query.key !== process.env.REPORT_CRON_KEY) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  res.json({ status: 'generating' }); // respond fast; compute + post async
+  try {
+    const recap = await getDisputeRecap('weekly');
+    await postWeeklyDisputeRecap(recap);
+    console.log(`[weekly-recap] posted for ${recap.periodLabel}`);
+  } catch (err) {
+    console.error('[weekly-recap] failed:', err.message);
+    await postSlackError(`Weekly dispute recap failed: ${err.message}`, { job: 'weekly-recap' }).catch(() => {});
+  }
+});
+
+// Monthly dispute recap — hit by cron-job.org on the 1st of each month.
+// Prior calendar month's filings + verdicts, plus a 6-month filed-cohort
+// table (statuses as of post time) and win-rate scorecard.
+app.get('/reports/monthly-recap', async (req, res) => {
+  if (process.env.REPORT_CRON_KEY && req.query.key !== process.env.REPORT_CRON_KEY) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  res.json({ status: 'generating' }); // respond fast; compute + post async
+  try {
+    const recap = await getDisputeRecap('monthly');
+    await postMonthlyDisputeRecap(recap);
+    console.log(`[monthly-recap] posted for ${recap.periodLabel}`);
+  } catch (err) {
+    console.error('[monthly-recap] failed:', err.message);
+    await postSlackError(`Monthly dispute recap failed: ${err.message}`, { job: 'monthly-recap' }).catch(() => {});
   }
 });
 

@@ -967,3 +967,155 @@ export async function postProductGapAlert({ tag, occurrenceCount, recentEvents }
   await web().chat.postMessage({ channel, text });
   console.log(`[slack] Posted product gap alert for ${tag} (${occurrenceCount} occurrences)`);
 }
+
+// ============================================================================
+// Weekly / monthly dispute recaps → #y-combinator (Siddz's ask, 2026-07-06).
+// Separate channel from the ops feed: RECAP_CHANNEL_ID, falling back to the
+// main disputes channel so the reports still land somewhere if the env var
+// is missing. The bot must be a member of the recap channel to post.
+// ============================================================================
+const recapChannelId = () => process.env.RECAP_CHANNEL_ID || process.env.SLACK_CHANNEL_ID;
+
+const _MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function _cohortLabel(key) {
+  const [y, m] = key.split('-');
+  return `${_MONTH_ABBR[Number(m) - 1]} ${y.slice(2)}`;
+}
+
+function _newDisputeLine(n) {
+  const who = n.name ? ` — ${n.name}` : '';
+  return `• ${formatMoney(n.amount, n.currency)} · ${n.reason}${who}`;
+}
+
+function _decidedLine(d) {
+  const who = d.name ? ` — ${d.name}` : '';
+  return d.status === 'won'
+    ? `• :white_check_mark: WON ${formatMoney(d.amount, d.currency)} back${who}`
+    : `• :x: LOST ${formatMoney(d.amount, d.currency)}${who}`;
+}
+
+export async function postWeeklyDisputeRecap(recap) {
+  const lines = [`:mailbox_with_mail: *Weekly Disputes — ${recap.periodLabel}*`];
+
+  for (const a of recap.accounts) {
+    if (a.newDisputes.length === 0) {
+      lines.push(`${a.flag} *${a.name} — no new disputes* :white_check_mark:`);
+    } else {
+      lines.push(
+        `${a.flag} *${a.name} — ${a.newDisputes.length} new · ${formatMoney(a.newAmount, a.currency)}*`,
+        ...a.newDisputes.map(_newDisputeLine)
+      );
+    }
+  }
+
+  const allDecided = recap.accounts.flatMap((a) => a.decided);
+  if (allDecided.length) {
+    lines.push(`:scales: *Decided this week:*`, ...allDecided.map(_decidedLine));
+  }
+
+  const openBits = recap.accounts.map((a) =>
+    a.openCount
+      ? `${a.flag} ${a.openCount} · ${formatMoney(a.openAmount, a.currency)}`
+      : `${a.flag} 0`
+  );
+  lines.push(`:hourglass_flowing_sand: *Awaiting verdict:* ${openBits.join('  |  ')}`);
+
+  await web().chat.postMessage({
+    channel: recapChannelId(),
+    text: `Weekly Disputes — ${recap.periodLabel}`,
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: ':information_source: Money on open disputes is already withheld by the bank — it comes back only if we win. Verdicts typically take 1–3 months.',
+          },
+        ],
+      },
+    ],
+  });
+}
+
+export async function postMonthlyDisputeRecap(recap) {
+  const blocks = [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `:bar_chart: *Monthly Disputes — ${recap.periodLabel}*` },
+    },
+  ];
+
+  for (const a of recap.accounts) {
+    const filedLine =
+      a.newDisputes.length === 0
+        ? `*Filed in ${recap.periodLabel.split(' ')[0]}:* none :white_check_mark:`
+        : `*Filed in ${recap.periodLabel.split(' ')[0]}:* ${a.newDisputes.length} · ${formatMoney(a.newAmount, a.currency)}\n` +
+          a.newDisputes.map(_newDisputeLine).join('\n');
+
+    const decidedLine = a.decided.length
+      ? `*Verdicts landed (any month's dispute):*\n` + a.decided.map(_decidedLine).join('\n')
+      : `*Verdicts landed:* none`;
+
+    const openLine = a.openCount
+      ? `*Awaiting verdict now:* ${a.openCount} · ${formatMoney(a.openAmount, a.currency)}`
+      : `*Awaiting verdict now:* none :white_check_mark:`;
+
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `${a.flag} *${a.name}*\n${filedLine}\n${decidedLine}\n${openLine}` },
+    });
+
+    // Cohort table: disputes grouped by the month they were FILED, with the
+    // status they hold today — so late verdicts update their own row instead
+    // of muddying the current month.
+    const totalFiled = (a.cohorts || []).reduce((s, c) => s + c.filed, 0);
+    if (totalFiled === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `_No disputes filed in the last 6 months._` },
+      });
+    } else {
+      const money = (cents) => formatMoney(cents, a.currency);
+      const rows = a.cohorts.map((c) =>
+        [
+          _cohortLabel(c.month).padEnd(7),
+          String(c.filed).padEnd(6),
+          `${c.won} (${money(c.wonAmount)})`.padEnd(14),
+          `${c.lost} (${money(c.lostAmount)})`.padEnd(15),
+          `${c.pending} (${money(c.pendingAmount)})`,
+        ].join('')
+      );
+      const table =
+        '```\n' +
+        ['Month  Filed Won          Lost           Pending', ...rows].join('\n') +
+        '\n```';
+      const s = a.scorecard;
+      const winRate = s.decided ? Math.round((s.won / s.decided) * 100) : 0;
+      const scorecard =
+        `*6-month scorecard:* ${s.decided} decided → ${s.won} won (${winRate}%) · ` +
+        `recovered ${money(s.wonAmount)} · lost ${money(s.lostAmount)} · fees ${money(s.feesPaid)}`;
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${table}\n${scorecard}` } });
+    }
+    blocks.push({ type: 'divider' });
+  }
+
+  blocks.push({
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text:
+          ':information_source: Disputes are grouped by the month they were *filed*; a verdict that lands later updates that same row. ' +
+          '"Pending" money is already withheld by the bank and returns only on a win. ' +
+          'The Stripe dispute fee ($15 / £20) is non-refundable even when we win.',
+      },
+    ],
+  });
+
+  await web().chat.postMessage({
+    channel: recapChannelId(),
+    text: `Monthly Disputes — ${recap.periodLabel}`,
+    blocks,
+  });
+}

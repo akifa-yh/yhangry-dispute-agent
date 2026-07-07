@@ -362,3 +362,218 @@ export async function submitEvidence(disputeId, analysis, booking, docxBuffer) {
   console.log(`[stripe] Evidence DRAFT saved (submit=false — needs manual submit in dashboard) for dispute ${disputeId} (${account})`);
   return { account, dueBy: updated.evidence_details?.due_by || null };
 }
+
+// ============================================================================
+// Weekly / monthly dispute recaps (posted to #y-combinator — Siddz's ask,
+// 2026-07-06). Unlike the ratio report these are outcome-aware: new disputes
+// in the window, verdicts landed in the window, money still on the line, and
+// (monthly) a filed-month cohort table so a dispute filed in April that gets
+// decided in June still lives in the April row — it just moves from pending
+// to won/lost. All computed live from Stripe at post time; no database.
+// ============================================================================
+
+// Statuses where the verdict is still open. Money for these (except
+// warning_* inquiries, where no funds have moved yet) is already withheld
+// by the bank and comes back only on a win.
+const _PENDING_STATUSES = new Set([
+  'needs_response',
+  'warning_needs_response',
+  'under_review',
+  'warning_under_review',
+]);
+
+async function _listDisputesSince(client, gte) {
+  const all = [];
+  let starting_after;
+  do {
+    const params = { limit: 100, created: { gte } };
+    if (starting_after) params.starting_after = starting_after;
+    const res = await client.disputes.list(params);
+    all.push(...res.data);
+    starting_after = res.has_more ? res.data[res.data.length - 1].id : null;
+  } while (starting_after);
+  return all;
+}
+
+// Billing name for the disputed charge — makes recap lines recognisable
+// ("$364 · product_not_received · Maddie Fuhrman"). Best-effort: a recap
+// must never fail because one charge lookup did.
+async function _disputeCustomerName(client, dispute) {
+  try {
+    const ch = await client.charges.retrieve(dispute.charge);
+    return ch.billing_details?.name || ch.billing_details?.email || null;
+  } catch {
+    return null;
+  }
+}
+
+// Disputes that got a final verdict inside the window, via the events API
+// (charge.dispute.closed) — the dispute object itself has no closed-at
+// field. Stripe retains events ~30 days, which covers both the weekly and
+// the monthly window. Statuses other than won/lost (e.g. warning_closed =
+// inquiry withdrawn before becoming a chargeback) are reported separately.
+async function _decidedInWindow(client, gte, lt) {
+  const decided = [];
+  let starting_after;
+  do {
+    const params = { limit: 100, type: 'charge.dispute.closed', created: { gte, lt } };
+    if (starting_after) params.starting_after = starting_after;
+    const res = await client.events.list(params);
+    for (const ev of res.data) {
+      const d = ev.data?.object;
+      if (d) decided.push(d);
+    }
+    starting_after = res.has_more ? res.data[res.data.length - 1].id : null;
+  } while (starting_after);
+  return decided;
+}
+
+function _sumAmount(disputes) {
+  return disputes.reduce((s, d) => s + (d.amount || 0), 0);
+}
+
+// Non-refundable Stripe dispute fees actually charged, straight from the
+// balance transactions (fee is paid even on a win).
+function _sumFees(disputes) {
+  return disputes.reduce(
+    (s, d) => s + (d.balance_transactions || []).reduce((t, tx) => t + (tx.fee || 0), 0),
+    0
+  );
+}
+
+// Recap for one account. `windowGte`/`windowLt` bound "new" and "decided";
+// `cohortGte` bounds the monthly cohort table (null for the weekly recap).
+async function _recapForAccount(client, { windowGte, windowLt, cohortGte }) {
+  const scanGte = cohortGte ?? windowGte - 365 * 24 * 3600; // open-dispute scan window
+  const [allDisputes, decidedRaw] = await Promise.all([
+    _listDisputesSince(client, Math.min(scanGte, windowGte)),
+    _decidedInWindow(client, windowGte, windowLt),
+  ]);
+
+  const currency = allDisputes[0]?.currency || decidedRaw[0]?.currency || null;
+
+  const newDisputes = [];
+  for (const d of allDisputes) {
+    if (d.created < windowGte || d.created >= windowLt) continue;
+    newDisputes.push({
+      id: d.id,
+      amount: d.amount,
+      currency: d.currency,
+      reason: d.network_reason_code || d.reason,
+      name: await _disputeCustomerName(client, d),
+    });
+  }
+
+  const decided = [];
+  for (const d of decidedRaw) {
+    if (d.status !== 'won' && d.status !== 'lost') continue;
+    decided.push({
+      id: d.id,
+      status: d.status,
+      amount: d.amount,
+      currency: d.currency,
+      name: await _disputeCustomerName(client, d),
+    });
+  }
+
+  const open = allDisputes.filter((d) => _PENDING_STATUSES.has(d.status));
+
+  const recap = {
+    currency,
+    newDisputes,
+    newAmount: _sumAmount(newDisputes.map((n) => ({ amount: n.amount }))),
+    decided,
+    won: decided.filter((d) => d.status === 'won'),
+    lost: decided.filter((d) => d.status === 'lost'),
+    openCount: open.length,
+    openAmount: _sumAmount(open),
+  };
+
+  if (cohortGte != null) {
+    // Filed-month cohorts with status as of right now. Keyed "YYYY-MM" (UTC).
+    // Every month in the range gets a row up front, including zero-dispute
+    // months — a visible zero is information, a missing row looks like a bug.
+    const byMonth = new Map();
+    const start = new Date(cohortGte * 1000);
+    for (
+      let y = start.getUTCFullYear(), m = start.getUTCMonth();
+      Date.UTC(y, m, 1) / 1000 < windowLt;
+      m === 11 ? (y++, (m = 0)) : m++
+    ) {
+      byMonth.set(`${y}-${String(m + 1).padStart(2, '0')}`, []);
+    }
+    for (const d of allDisputes) {
+      if (d.created < cohortGte) continue;
+      const dt = new Date(d.created * 1000);
+      const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
+      if (!byMonth.has(key)) byMonth.set(key, []);
+      byMonth.get(key).push(d);
+    }
+    recap.cohorts = [...byMonth.keys()].sort().map((key) => {
+      const ds = byMonth.get(key);
+      const won = ds.filter((d) => d.status === 'won');
+      const lost = ds.filter((d) => d.status === 'lost');
+      const pending = ds.filter((d) => _PENDING_STATUSES.has(d.status));
+      return {
+        month: key,
+        filed: ds.length,
+        filedAmount: _sumAmount(ds),
+        won: won.length,
+        wonAmount: _sumAmount(won),
+        lost: lost.length,
+        lostAmount: _sumAmount(lost),
+        pending: pending.length,
+        pendingAmount: _sumAmount(pending),
+      };
+    });
+    const cohortDisputes = [...byMonth.values()].flat();
+    recap.scorecard = {
+      decided: cohortDisputes.filter((d) => d.status === 'won' || d.status === 'lost').length,
+      won: cohortDisputes.filter((d) => d.status === 'won').length,
+      wonAmount: _sumAmount(cohortDisputes.filter((d) => d.status === 'won')),
+      lostAmount: _sumAmount(cohortDisputes.filter((d) => d.status === 'lost')),
+      feesPaid: _sumFees(cohortDisputes),
+    };
+  }
+
+  return recap;
+}
+
+// kind: 'weekly' = trailing 7 days ending now (run Monday morning → covers
+// Mon–Sun). 'monthly' = the most-recently-completed calendar month, plus a
+// 6-month cohort table. Both accounts, US first (it carries the volume).
+export async function getDisputeRecap(kind, now = new Date()) {
+  const nowSec = Math.floor(now.getTime() / 1000);
+  let windowGte, windowLt, cohortGte = null, periodLabel;
+
+  if (kind === 'weekly') {
+    windowLt = nowSec;
+    windowGte = nowSec - 7 * 24 * 3600;
+    const fmt = (s) => {
+      const d = new Date(s * 1000);
+      return `${d.getUTCDate()} ${_MONTHS[d.getUTCMonth()].slice(0, 3)}`;
+    };
+    periodLabel = `${fmt(windowGte)} – ${fmt(windowLt - 1)}`;
+  } else {
+    const y = now.getUTCFullYear(), m = now.getUTCMonth();
+    windowGte = Math.floor(Date.UTC(y, m - 1, 1) / 1000);
+    windowLt = Math.floor(Date.UTC(y, m, 1) / 1000);
+    cohortGte = Math.floor(Date.UTC(y, m - 6, 1) / 1000);
+    const rm = new Date(windowGte * 1000);
+    periodLabel = `${_MONTHS[rm.getUTCMonth()]} ${rm.getUTCFullYear()}`;
+  }
+
+  const defs = [
+    { name: 'US', flag: '🇺🇸', currency: 'usd', client: process.env.STRIPE_SECRET_KEY_US ? getStripeUs() : null },
+    { name: 'UK', flag: '🇬🇧', currency: 'gbp', client: process.env.STRIPE_SECRET_KEY ? getStripeUk() : null },
+  ];
+  const accounts = [];
+  for (const def of defs) {
+    if (!def.client) continue;
+    const recap = await _recapForAccount(def.client, { windowGte, windowLt, cohortGte });
+    // A quiet account has no disputes to infer its currency from.
+    recap.currency = recap.currency || def.currency;
+    accounts.push({ name: def.name, flag: def.flag, ...recap });
+  }
+  return { kind, periodLabel, accounts };
+}
