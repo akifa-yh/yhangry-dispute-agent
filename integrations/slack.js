@@ -982,16 +982,22 @@ function _cohortLabel(key) {
   return `${_MONTH_ABBR[Number(m) - 1]} ${y.slice(2)}`;
 }
 
+// formatMoney with thousands separators ($9,625.00) — recap-local so the
+// shared util (which feeds bank-facing PDF/prompt copy) stays untouched.
+function _fmtMoney(cents, currency) {
+  return formatMoney(cents, currency).replace(/\d(?=(\d{3})+\.)/g, '$&,');
+}
+
 function _newDisputeLine(n) {
   const who = n.name ? ` — ${n.name}` : '';
-  return `• ${formatMoney(n.amount, n.currency)} · ${n.reason}${who}`;
+  return `• ${_fmtMoney(n.amount, n.currency)} · ${n.reason}${who}`;
 }
 
 function _decidedLine(d) {
   const who = d.name ? ` — ${d.name}` : '';
   return d.status === 'won'
-    ? `• :white_check_mark: WON ${formatMoney(d.amount, d.currency)} back${who}`
-    : `• :x: LOST ${formatMoney(d.amount, d.currency)}${who}`;
+    ? `• :white_check_mark: WON ${_fmtMoney(d.amount, d.currency)} back${who}`
+    : `• :x: LOST ${_fmtMoney(d.amount, d.currency)}${who}`;
 }
 
 export async function postWeeklyDisputeRecap(recap) {
@@ -1002,7 +1008,7 @@ export async function postWeeklyDisputeRecap(recap) {
       lines.push(`${a.flag} *${a.name} — no new disputes* :white_check_mark:`);
     } else {
       lines.push(
-        `${a.flag} *${a.name} — ${a.newDisputes.length} new · ${formatMoney(a.newAmount, a.currency)}*`,
+        `${a.flag} *${a.name} — ${a.newDisputes.length} new · ${_fmtMoney(a.newAmount, a.currency)}*`,
         ...a.newDisputes.map(_newDisputeLine)
       );
     }
@@ -1015,7 +1021,7 @@ export async function postWeeklyDisputeRecap(recap) {
 
   const openBits = recap.accounts.map((a) =>
     a.openCount
-      ? `${a.flag} ${a.openCount} · ${formatMoney(a.openAmount, a.currency)}`
+      ? `${a.flag} ${a.openCount} · ${_fmtMoney(a.openAmount, a.currency)}`
       : `${a.flag} 0`
   );
   lines.push(`:hourglass_flowing_sand: *Awaiting verdict:* ${openBits.join('  |  ')}`);
@@ -1050,7 +1056,7 @@ export async function postMonthlyDisputeRecap(recap) {
     const filedLine =
       a.newDisputes.length === 0
         ? `*Filed in ${recap.periodLabel.split(' ')[0]}:* none :white_check_mark:`
-        : `*Filed in ${recap.periodLabel.split(' ')[0]}:* ${a.newDisputes.length} · ${formatMoney(a.newAmount, a.currency)}\n` +
+        : `*Filed in ${recap.periodLabel.split(' ')[0]}:* ${a.newDisputes.length} · ${_fmtMoney(a.newAmount, a.currency)}\n` +
           a.newDisputes.map(_newDisputeLine).join('\n');
 
     const decidedLine = a.decided.length
@@ -1058,7 +1064,7 @@ export async function postMonthlyDisputeRecap(recap) {
       : `*Verdicts landed:* none`;
 
     const openLine = a.openCount
-      ? `*Awaiting verdict now:* ${a.openCount} · ${formatMoney(a.openAmount, a.currency)}`
+      ? `*Awaiting verdict now:* ${a.openCount} · ${_fmtMoney(a.openAmount, a.currency)}`
       : `*Awaiting verdict now:* none :white_check_mark:`;
 
     blocks.push({
@@ -1076,7 +1082,7 @@ export async function postMonthlyDisputeRecap(recap) {
         text: { type: 'mrkdwn', text: `_No disputes filed in the last 6 months._` },
       });
     } else {
-      const money = (cents) => formatMoney(cents, a.currency);
+      const money = (cents) => _fmtMoney(cents, a.currency);
       const rows = a.cohorts.map((c) =>
         [
           _cohortLabel(c.month).padEnd(7),
