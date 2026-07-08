@@ -137,9 +137,18 @@ function buildStripeFormGuidance(dispute, analysis, booking) {
   const isNoShow = attend === 'CUSTOMER_NO_SHOW' || strat === 'CUSTOMER_NO_SHOW';
   const isCancelled = attend === 'EVENT_CANCELLED_BY_CUSTOMER' || strat === 'EVENT_CANCELLED_BY_CUSTOMER';
   const isRendered = strat === 'SERVICE_RENDERED' || attend === 'CONFIRMED' || attend === 'LIKELY';
+  // Multi-service partial delivery (Tatiana Hakim archetype): the disputed
+  // amount maps to the CANCELLED remainder, so a flat "cardholder received the
+  // product or service" would claim receipt of services our own pack concedes
+  // never happened — the exact overstatement the :jigsaw: banner bans. Must
+  // outrank isRendered (attendance is CONFIRMED by design in this archetype).
+  const isMultiService = analysis?.multi_service_partial_delivery === true;
 
   let winLabel, winOther;
-  if (isRendered) {
+  if (isMultiService) {
+    winLabel = '"Other"';
+    winOther = 'Multi-service booking: the first service was delivered — conceded by the cardholder\'s own partial-dispute arithmetic and written offers to pay for it; the cardholder then cancelled the remaining services within the non-refundable window, so the disputed amount is the agreed 100% cancellation fee under our booking terms.';
+  } else if (isRendered) {
     winLabel = '"The cardholder received the product or service"';
   } else if (isNoShow) {
     winLabel = '"Other"';
@@ -160,10 +169,10 @@ function buildStripeFormGuidance(dispute, analysis, booking) {
   if (winOther) lines.push(`     ↳ in the "Other" box, paste: _${winOther}_`);
   lines.push('• *Product / service type:* "Offline service" (or "Booking or reservation")');
   if (booking?.order_id) lines.push(`• *Booking number:* ${booking.order_id}`);
-  lines.push(`• *Booking status* (if asked): *${isCancelled ? 'Cancelled' : 'Active'}*`);
+  lines.push(`• *Booking status* (if asked): *${(isCancelled || isMultiService) ? 'Cancelled' : 'Active'}*`);
   if (booking?.event_date) lines.push(`• *Booking start date:* ${formatEventDate(booking.event_date)}`);
   lines.push('• *Offered a credit or voucher:* No');
-  lines.push((isNoShow || isCancelled)
+  lines.push((isNoShow || isCancelled || isMultiService)
     ? '• *Showed refund & cancellation terms:* Yes → the booking-terms page is already in the generated PDF; tag that upload category *"Refund & cancellation policy"*.'
     : '• *Showed refund & cancellation terms:* Yes (accepted at checkout) — attach the booking-terms page as *"Refund & cancellation policy"* if submitting it.');
 
@@ -379,6 +388,25 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       text: {
         type: 'mrkdwn',
         text: `:writing_hand: *CARDHOLDER ADMISSION DETECTED* — the strongest possible counter-evidence. Banks rule for the merchant almost every time when the cardholder has admitted in writing.\n> _"${quote}"_\nThe PDF will lead with this admission as the primary argument.`,
+      },
+    });
+  }
+
+  // Multi-service partial-delivery banner (Tatiana Hakim archetype) — ONE
+  // payment covered several distinct services/dates, at least one was
+  // delivered, and the cardholder cancelled the rest. The counter must argue
+  // BOTH forks: service-rendered for the delivered portion (led by the
+  // cardholder's own dispute arithmetic / admissions) AND the 100%
+  // Cancellation Fee case for the cancelled remainder (chef costs framed as
+  // COST, never as delivery). Independent of recommendation, mirroring the
+  // admission banner above; the field is optional so older analyses render
+  // nothing here.
+  if (analysis.multi_service_partial_delivery === true) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: ':jigsaw: *MULTI-SERVICE PARTIAL DELIVERY* — one payment, several services: at least one was delivered and the cardholder cancelled the remainder. The counter must argue BOTH halves: (1) the *delivered* service — lead with the cardholder\'s own admissions and self-excluded amount (their dispute arithmetic concedes receipt); (2) the *cancelled remainder* (what the disputed money maps to) — customer cancellation → 100% Cancellation Fee under the accepted Booking Terms *where the cancellation fell within the 7-day no-refund window* (check each cancelled service\'s date — the fee does not cover services still 7+ days out), with chef costs framed as COST INCURRED, never as "service delivered". Do not claim the cancelled services were delivered.',
       },
     });
   }

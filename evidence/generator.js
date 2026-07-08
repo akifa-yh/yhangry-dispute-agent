@@ -293,6 +293,21 @@ function pickBottomLine(analysis, dispute, booking) {
     };
   }
 
+  // Multi-service partial delivery (Tatiana Hakim archetype) — one payment,
+  // several services; the first was delivered and the cardholder cancelled the
+  // rest. Must outrank the deadline banners below (the routing bans deadline
+  // framing when the complaint was timely) and the CONFIRMED+survey banner
+  // (which would headline an unqualified whole-booking delivery claim on a
+  // dispute whose amount maps to cancelled, undelivered services — and the
+  // survey is a payment claim covering the cancelled services too).
+  if (analysis.multi_service_partial_delivery === true) {
+    return {
+      headline: 'FIRST SERVICE DELIVERED — CARDHOLDER\'S OWN ARITHMETIC CONCEDES RECEIPT; DISPUTED REMAINDER = AGREED CANCELLATION FEE',
+      detail: 'One payment covered multiple distinct services. The first service was delivered — conceded by the cardholder\'s own dispute arithmetic (the disputed amount excludes the value they allocated to the delivered service) and their written offers to pay for it. The cardholder then cancelled the remaining services; the disputed amount maps to that cancelled remainder and, where the cancellation fell within the no-refund window, is retained as the agreed 100% cancellation fee under the booking terms accepted at checkout — not payment for delivered services. The chef\'s documented costs for the cancelled services are what the fee covers.',
+      tone: 'strong',
+    };
+  }
+
   // Never build a bank-facing "no/late complaint" claim on a search that
   // errored. agent/index.js already downgrades deadline_status to
   // SEARCH_INCOMPLETE in that case; this guard is the backstop for stale
@@ -465,7 +480,13 @@ function buildAttachedExhibitList({ dispute, analysis, platformMessages, allCont
   // checkout acceptance + the cancellation policy's "fail to attend" clause.
   // (Brad Gabrys, 2026-06 — previously these had to be hand-built for no-shows.)
   const isNoShow = analysis?.chef_attendance_assessment === 'CUSTOMER_NO_SHOW';
-  const termsRelevant = isCancelled || isNoShow;
+  // Multi-service partial delivery (Tatiana Hakim archetype): attendance is
+  // CONFIRMED by design, so neither flag above fires — but fork (b) of the
+  // narrative anchors the disputed remainder on the accepted Booking Terms'
+  // 100% Cancellation Fee, so both terms exhibits must attach or the pack
+  // cites a policy it never shows (the GAN-review M4 defect class).
+  const isMultiService = analysis?.multi_service_partial_delivery === true;
+  const termsRelevant = isCancelled || isNoShow || isMultiService;
   const hasUploads = (exhibits || []).some((ex) => ex?.source);
 
   // 1. Auto-rendered platform-messages chat. Suppressed when ops has uploaded
@@ -968,8 +989,12 @@ export async function generateEvidence({ analysis, dispute, booking, platformMes
   // Skip the deadline-anchored timeline for admission cases (deadline is moot)
   // and for cancellation cases (its "first complaint contact / T&C deadline"
   // framing is misleading when the dispute is about a late cancellation, not a
-  // post-event complaint — and it omits the actual cancellation event).
+  // post-event complaint — and it omits the actual cancellation event). Same
+  // rationale for multi-service partial delivery: the routing bans deadline
+  // framing when the complaint was timely, and the timeline omits the
+  // cancellation of the remaining services.
   if (!analysis.customer_admission_detected &&
+      analysis.multi_service_partial_delivery !== true &&
       analysis.chef_attendance_assessment !== 'EVENT_CANCELLED_BY_CUSTOMER' &&
       analysis.chef_attendance_assessment !== 'CUSTOMER_NO_SHOW') {
     drawCompactTimeline(doc, analysis, dispute, booking);
