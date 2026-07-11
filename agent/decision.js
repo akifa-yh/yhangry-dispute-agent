@@ -342,16 +342,20 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       ? ` _LLM initially recommended ${analysis._overrode_recommendation}; deterministic override applied._`
       : '';
     if (analysis.rebuttal_strategy === 'ACCEPT_MERCHANT_NONPERFORMANCE') {
-      // Surcharge-standoff / merchant non-performance (Maddie Fuhrman pattern):
-      // the cardholder paid in full for a service the chef then declined to
-      // deliver over an unagreed add-on fee. To the bank this is "services not
-      // received" — unwinnable, and the internal chef-coaching thread must never
-      // be submitted. Distinct copy from the stolen-card ACCEPT banner.
+      // Merchant non-performance (any chef-fault failure to deliver: fee
+      // standoff, no-show, medical, unilateral date move). To the bank this is
+      // "services not received" — unwinnable, and internal chef↔yhangry threads
+      // must never be submitted. This banner is a TEMPLATE: it must only state
+      // what is true of EVERY case on this branch. The case-specific facts
+      // (WHY the chef didn't perform) belong to the LLM's *Reasoning* section —
+      // never hardcode a particular case's story here (Lawrence Suen lesson,
+      // 2026-07-11: a medical no-show was mislabelled with the Maddie fee-standoff
+      // narrative that used to live in this string).
       blocks.push({
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:no_bell: *MERCHANT NON-PERFORMANCE — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute*; do NOT counter. The cardholder paid in full for a service the chef then declined to deliver over an add-on fee the customer never agreed to — to the issuing bank this is "services not received", and our internal "chef's discretion / non-refundable" policy does not bind them. Countering loses the money anyway and hurts our lost-dispute ratio. Do NOT submit the booking terms/no-show exhibits or the internal chef-coaching thread. Any partial-cost recovery is a goodwill conversation with the customer, not a formal counter.${overrideNote}`,
+          text: `:no_bell: *MERCHANT NON-PERFORMANCE — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute*; do NOT counter. The cardholder paid for a service our chef failed to deliver — to the issuing bank this is "services not received" regardless of the reason on our side, and internal policy language does not bind them. Countering loses the money anyway and hurts our lost-dispute ratio. Do NOT submit booking-terms/no-show exhibits or any internal chef↔yhangry threads. See *Reasoning* below for what happened in this specific case; any partial-cost recovery is a goodwill or chef-clawback conversation, not a formal counter.${overrideNote}`,
         },
       });
     } else {
