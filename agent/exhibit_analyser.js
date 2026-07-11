@@ -98,7 +98,7 @@ DISPUTE CONTEXT (for your reasoning only — do NOT quote in output):
 - Network reason code: ${dispute.network_reason_code || 'N/A'}
 - Customer: ${customerName || 'unknown'}
 - Booking #: ${booking?.order_id || 'unknown'}
-- Event date: ${eventDateStr} — exhibit dates should fall on or very near this (the event day, or the days just before for ingredients / prep / travel). A date in a different month or year is almost certainly a misread.
+- Event date: ${eventDateStr} — use this to sanity-check dates you read. Chef cost evidence (ingredients / prep / travel) usually clusters on or just before the event day, but many legitimate exhibits carry OTHER dates: booking confirmations and pre-event emails (booking date), post-event complaint/dispute correspondence (days or weeks after), policy pages (undated or older). A read date far from the event is a reason to RE-CHECK your reading and then trust the document — not to force it toward the event date.
 - Internal recommendation: ${analysis?.recommendation || 'N/A'}
 - Internal rebuttal strategy: ${analysis?.rebuttal_strategy || 'N/A'}
 - Internal reasoning (truncated): ${reasoning}
@@ -109,12 +109,15 @@ I will provide ${images.length} image${images.length === 1 ? '' : 's'}. For EACH
 
   document_label  — a short noun phrase identifying WHAT the document is (type +
                     sender where clear). Be CAREFUL with dates, addresses and
-                    reference numbers: include a date ONLY if it is clearly legible
-                    AND consistent with the event date above. If a date you read would
-                    land in a different month/year than the event, you have almost
-                    certainly misread it — re-read; if still unsure, describe the
-                    document WITHOUT asserting a date (the image itself shows the date
-                    to the reviewer). NEVER guess a date, address or reference number.
+                    reference numbers: include a date ONLY if it is clearly legible.
+                    If a date you read seems inconsistent with what the document IS
+                    (e.g. an ingredients receipt dated months after the event),
+                    re-read it once; if still unsure, describe the document WITHOUT
+                    asserting a date (the image itself shows the date to the
+                    reviewer). Post-event documents (complaint emails, dispute
+                    letters, withdrawal confirmations) legitimately carry dates well
+                    after the event — do not "correct" them toward the event date.
+                    NEVER guess a date, address or reference number.
                     Examples:
                       "American Express dispute confirmation letter dated 1 May 2026"
                       "Supermarket receipt for groceries purchased for the booking"

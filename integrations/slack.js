@@ -872,7 +872,7 @@ export async function postDisputeOutcome({ outcome, booking }) {
     lines.push(
       ':warning: *Heads-up:* Formal status and API balance-transaction net disagree. ' +
         'Stripe may apply account-level adjustments that don\'t surface as per-dispute ' +
-        'balance_transactions (this happened on Katie Robertson 2026-05-21). ' +
+        'balance_transactions (this happened on a past case, Katie Robertson 2026-05-21). ' +
         '*Verify the actual cash position in Stripe Dashboard → Balance → Payouts* — ' +
         'the dashboard is authoritative when it disagrees with the API view here.'
     );
