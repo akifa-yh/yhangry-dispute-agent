@@ -207,11 +207,11 @@ const visa_12_5 = {
     customer_initiated_booking_proof:
       'Platform messages from customer pre-payment showing engagement with the booking.',
     customer_admission:
-      'Email correspondence where the customer acknowledges the dispute was filed in error. STRONGEST possible evidence — lead with this in the merchant response callout. Katie Robertson 2026-05-10 email is the canonical example: "I will cancel the dispute with my card. My apologies!"',
+      'Email correspondence where THIS cardholder acknowledges the dispute was filed in error (e.g. a written commitment to cancel/withdraw it). STRONGEST possible evidence WHEN IT EXISTS — check the correspondence; if present, lead with it in the merchant response callout. Do not assume one exists: many 12.5 cases have no admission.',
   },
 
   notes:
-    'Katie Robertson case (2026-05-02 → 2026-05-13) is the canonical 12.5 for yhangry: customer paid £520, saw a USD amount on her Chase statement that didn\'t match what she\'d been mentally calculating, filed 12.5. The email exchange revealed she was converting GBP→EUR instead of GBP→USD; she acknowledged the error in writing and committed to withdrawing. RULES FOR 12.5 REBUTTALS: (1) NEVER lead with chef attendance — irrelevant, this is pricing not service. (2) NEVER lead with the complaint deadline — disputes can be filed pre-event for 12.x; the deadline argument doesn\'t bind. (3) LEAD with: "merchant-currency authorised = merchant-currency charged, no discrepancy". (4) Frame the cardholder\'s statement-currency value as the issuer\'s FX conversion (Chase converts GBP to USD at their own rate; merchant does not control this). (5) If a customer_admission email exists, that\'s dispositive — surface it as the BOTTOM-LINE callout in the PDF.',
+    'Typical yhangry 12.5 pattern (seen in a 2026-05 case): customer pays in merchant currency, sees a different figure on their statement after the issuer\'s FX conversion, and files 12.5 believing they were overcharged; correspondence sometimes reveals a conversion mix-up the customer acknowledges in writing. RULES FOR 12.5 REBUTTALS: (1) NEVER lead with chef attendance — irrelevant, this is pricing not service. (2) NEVER lead with the complaint deadline — disputes can be filed pre-event for 12.x; the deadline argument doesn\'t bind. (3) LEAD with: "merchant-currency authorised = merchant-currency charged, no discrepancy". (4) Frame the cardholder\'s statement-currency value as the ISSUER\'s FX conversion (the issuer converts at its own rate; the merchant does not control this). (5) If a customer_admission email exists in THIS case, that\'s dispositive — surface it as the BOTTOM-LINE callout in the PDF.',
 };
 
 const visa_12_6_1 = {
@@ -285,7 +285,7 @@ const visa_12_6_2 = {
   },
 
   notes:
-    "Before submitting, verify with ops that no parallel payment was received for this booking. yhangry\'s booking confirmation email explicitly warns customers not to pay off-platform (\"Our protection policies do not cover you if payments are made off platform\") — that warning is useful counter-evidence if the customer claims an off-platform payment was made.",
+    "Before submitting, verify with ops that no parallel payment was received for this booking. CHECK this booking's actual confirmation email for the off-platform-payment warning (recent templates include wording like 'Our protection policies do not cover you if payments are made off platform') — IF this customer's email contains it, it is useful counter-evidence against an off-platform-payment claim; do not assert it without checking the sent email.",
 };
 
 const visa_13_1 = {
@@ -335,7 +335,7 @@ const visa_13_3 = {
   reason_code: '13.3',
   label: 'Not as Described or Defective Merchandise/Services',
   description:
-    "Cardholder claims the goods or services received did not match what was described or were of unacceptable quality. For private chef bookings, this is the most common dispute category — covers missing courses, substitutions, chef leaving early, food quality complaints, etc. This is the Tyler Nader code.",
+    "Cardholder claims the goods or services received did not match what was described or were of unacceptable quality. For private chef bookings, this is the most common dispute category — covers missing courses, substitutions, chef leaving early, food quality complaints, etc. Source case for this playbook: Tyler Nader.",
 
   common_claims: [
     'courses_not_served',
@@ -383,7 +383,7 @@ const visa_13_3 = {
   },
 
   notes:
-    'BIGGEST yhangry FAILURE MODE — this is the Tyler code. We lost Tyler primarily because: (1) no click-to-accept timestamp evidence (bank stated "click-to-accept on cancellation policy not demonstrated"), (2) no real photographic proof of service delivery (chef payout photo was generic stock-style and we did not include even the generic checkout screenshot), (3) the customer\'s "abandoned dessert" allegation went unaddressed. The two biggest leverable wins for 13.3 going forward: (a) include the checkout flow screenshot in EVERY 13.3 pack (default, not optional), (b) for any case where the chef has admitted in writing to substitutions/early-leave/etc., that admission goes to evidence_weaknesses NOT evidence_to_include — banks read these as own-goal corroboration of the customer\'s claim.',
+    'BIGGEST yhangry FAILURE MODE — lesson from the Tyler past case, which we lost primarily because: (1) no click-to-accept timestamp evidence (bank stated "click-to-accept on cancellation policy not demonstrated"), (2) no real photographic proof of service delivery (chef payout photo was generic stock-style and we did not include even the generic checkout screenshot), (3) the customer\'s "abandoned dessert" allegation went unaddressed. The two biggest leverable wins for 13.3 going forward: (a) include the checkout flow screenshot in EVERY 13.3 pack (default, not optional), (b) for any case where the chef has admitted in writing to substitutions/early-leave/etc., that admission goes to evidence_weaknesses NOT evidence_to_include — banks read these as own-goal corroboration of the customer\'s claim.',
 };
 
 const visa_13_5 = {
@@ -716,7 +716,7 @@ const amex_C02 = {
   reason_code: 'C02',
   label: 'Credit Not Processed',
   description:
-    "Amex equivalent of Visa 13.6 / Mastercard 4860 — the cardholder claims a promised credit/refund was never processed. yhangry-specific trap: this frequently follows GOODWILL (a refund and/or account credit) issued AFTER an earlier dispute on the same payment was won. The win path is to show the credit WAS processed AND that the cardholder agreed to that specific remedy — not to re-argue the original service complaint.",
+    "Amex equivalent of Visa 13.6 / Mastercard 4860 — the cardholder claims a promised credit/refund was never processed. Win paths, depending on THIS case's facts: (a) the promised credit/refund WAS processed and the cardholder agreed to that specific remedy in writing — prove both; (b) no credit was ever promised or owed — prove the absence of any refund commitment; (c) double-dip: goodwill was issued after an earlier dispute on the same payment and the cardholder is re-disputing to collect twice — prove the goodwill and cite the prior dispute. Never re-argue the original service complaint; C02 is about the credit, not the service.",
 
   common_claims: [
     'credit_promised_but_not_received',
@@ -739,13 +739,13 @@ const amex_C02 = {
 
   yhangry_evidence_sources: {
     customer_agreed_remedy:
-      "Gmail correspondence (info@yhangry.com inbox) where the cardholder accepts the remedy in writing — e.g. 'Please process a $50 credit to yhangry that doesn't expire and refund the 4% fee also.' STRONGEST evidence for C02: it shows the customer chose the account credit over a card refund. Lead with it.",
+      "Gmail correspondence (info@yhangry.com inbox) where THIS cardholder accepts the remedy in writing (a message specifying the credit/refund they asked for or agreed to). STRONGEST evidence for C02 when it exists: it shows the customer chose that remedy. Quote THIS case's message — never a past case's wording.",
     credit_voucher_record:
-      'yhangry admin voucher / account-credit record (Nova) showing the goodwill credit is LIVE, UNREDEEMED, and assigned to this customer (e.g. voucher code KHU50AGG, value $50, redeemed=false). MUST be live at submission — never revoke the credit mid-dispute, as that makes the "credit not processed" claim literally true.',
+      'yhangry admin voucher / account-credit record (Nova) showing the goodwill credit is LIVE, UNREDEEMED, and assigned to THIS customer (pull the actual voucher code, value and redeemed flag from Nova). MUST be live at submission — never revoke the credit mid-dispute, as that makes the "credit not processed" claim literally true.',
     refund_processed_proof:
       "Stripe refund record + the receipt emailed to the customer, plus the Stripe payment activity log entry ('Successfully refunded $X due to customer request'). Stripe's own log is higher-independence than yhangry's confirmation email.",
     payment_receipt:
-      'Stripe charge + refund receipt showing the amounts and the card refunded (e.g. AmEx ...1003).',
+      'Stripe charge + refund receipt showing the amounts and the card refunded (last4 from THIS charge).',
     service_delivery_proof:
       'chef_submitted_payment_survey + day-of comms — establishes the core service was delivered and only a complimentary/ancillary item was ever in question.',
     customer_admission:
@@ -753,7 +753,7 @@ const amex_C02 = {
   },
 
   notes:
-    'Khushbu Aggarwal 2026-06 is the canonical C02 for yhangry: won a $50 13.x dispute, was given goodwill ($20 card refund + $50 non-expiring account credit she agreed to in writing), then re-disputed the same $50 as C02 to double-dip. RULES FOR C02: (1) LEAD with customer_agreed_remedy + credit_voucher_record + refund_processed_proof — prove the credit was processed and accepted. (2) Do NOT lead with the prior dispute\'s withdrawal admission — that pertained to the earlier dispute (see PRIOR DISPUTES + admission time-scope handling). (3) If a prior dispute on this payment was WON, cite it as a duplicate / second-bite signal. (4) Keep the credit live through resolution.',
+    'RULES FOR C02: (1) First establish WHICH win path fits THIS case (credit processed & agreed / no credit ever owed / double-dip after goodwill) — do not assume the double-dip pattern; it is one worked example (a 2026-06 case: earlier dispute won, goodwill card refund + account credit accepted in writing, same amount re-disputed as C02), not the definition of C02. (2) Where goodwill/credit exists, LEAD with customer_agreed_remedy + credit_voucher_record + refund_processed_proof — prove the credit was processed and accepted. (3) Do NOT lead with a prior dispute\'s withdrawal admission — that pertained to the earlier dispute (see PRIOR DISPUTES + admission time-scope handling). (4) If a prior dispute on this payment was WON, cite it as a duplicate / second-bite signal. (5) Keep any live credit live through resolution.',
 };
 
 const amex_C08 = {
@@ -836,7 +836,7 @@ const amex_C31 = {
   },
 
   notes:
-    'Same playbook as Visa 13.3 (the Tyler code). Include the checkout terms-acceptance screenshot by default; route any chef-admitted substitution/early-leave to evidence_weaknesses, not evidence_to_include.',
+    'Same playbook as Visa 13.3 (see that code\'s past-case lesson). Include the checkout terms-acceptance screenshot by default; route any chef-admitted substitution/early-leave to evidence_weaknesses, not evidence_to_include.',
 };
 
 const amex_C05 = {

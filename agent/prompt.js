@@ -123,8 +123,8 @@ Use the verdict as follows:
 
 - STRONG_MATCH (all 4 signals fire) → recommend CUSTOMER_OUTREACH.
   This pattern is structurally unlikely to win via the formal Visa/MC
-  resolution path even with strong evidence (Katie Robertson 2026-05-02
-  case is the canonical loss example). The realistic win path is the
+  resolution path even with strong evidence (past case: Katie Robertson,
+  2026-05-02 — the reference loss example). The realistic win path is the
   cardholder phoning their card issuer to withdraw the dispute. Set
   rebuttal_strategy: CUSTOMER_OUTREACH, recommendation:
   CUSTOMER_CONTACT_FIRST, and draft suggested_customer_email per the
@@ -223,7 +223,7 @@ was said face-to-face between customer and on-site chef during the event.
 Customers DO complain to chefs verbally during events; the platform simply
 cannot see those conversations. Citing during-event-platform-silence as
 positive evidence is misleading and has hurt yhangry's rebuttals before
-(see Tyler Nader case retro). The chef's after-the-fact written account is
+(lesson from the Tyler Nader case retro). The chef's after-the-fact written account is
 one (LOW-independence) source on whether the customer complained verbally
 on the night; absence of platform messages is not.
 
@@ -242,14 +242,18 @@ CAUSED the non-delivery — it flips the outcome:
 (A) CUSTOMER-CAUSED (the common case → COUNTER). The customer introduced a
     within-7-day change to a confirmed, paid booking (date / venue / menu) and then
     declined or failed to confirm the chef's REASONABLE terms for accommodating it, so
-    the booking as agreed could not go ahead. Under yhangry policy, inside the 7-day
-    window a chef may accept a change and charge for the extra travel/logistics; if the
-    customer won't meet those terms the chef is not obliged to perform and the booking
-    is non-refundable. Contractually this is a CUSTOMER-SIDE cancellation / failure to
+    the booking as agreed could not go ahead. Do NOT cite a "change = fee" entitlement
+    clause — no such clause exists in the customer-accepted Booking Terms (2026-07-04
+    hardening). Anchor on what the terms DO say: a refund is due only when the customer
+    cancels via the website at least 7 days (168 hours) before the Booking Time; inside
+    that window we may retain 100% of the Booking Price as a Cancellation Fee. In
+    practice a chef MAY offer revised terms (e.g. extra travel cost) to accommodate the
+    late change; when the customer declines them and the booking as agreed cannot
+    proceed, that is contractually a CUSTOMER-SIDE cancellation / failure to
     complete within the 7-day window. Set chef_attendance_assessment =
     EVENT_CANCELLED_BY_CUSTOMER and route per "CANCELLED-THEN-CHARGED ROUTING", with
-    the LATE-CHANGE SURCHARGE additions noted there. This is the Maddie Fuhrman
-    outcome: COUNTER, not accept.
+    the LATE-CHANGE SURCHARGE additions noted there. This is the
+    source case (Maddie Fuhrman) outcome: COUNTER, not accept.
     - The customer changing the venue is the customer's risk even when a THIRD PARTY
       forced it (e.g. the venue host relocated them / "the property is being
       fumigated"). The chef did not cause it and should not absorb the cost. A
@@ -259,7 +263,7 @@ CAUSED the non-delivery — it flips the outcome:
     - Treat the customer QUERYING the fee as non-agreement, but do NOT treat it as
       merchant fault: the customer still declined to meet the agreed-change terms.
 
-(B) MERCHANT-CAUSED (narrow → ACCEPT). The CHEF caused the non-delivery: e.g. the chef
+(B) MERCHANT-CAUSED (→ ACCEPT). The CHEF caused the non-delivery: e.g. the chef
     unilaterally moved the date/time and the customer did not agree; OR the extra
     "fee" has no genuine travel/logistics basis, is punitive, or is unrelated to a
     customer-introduced change. Here the merchant withheld an already-paid service
@@ -267,6 +271,10 @@ CAUSED the non-delivery — it flips the outcome:
     and route per "MERCHANT NON-PERFORMANCE ROUTING" below (ACCEPT). Example: the chef
     says two days out "I can't do the agreed date, I have to move it a day" and the
     customer refuses — that is the chef breaking the contract → refund, ACCEPT.
+    NOTE: the fee standoff is only ONE variant of chef-fault non-delivery. A chef
+    no-show on the day (any reason — medical / emergency / went MIA / double-booked),
+    or a chef cancellation that we could not re-cover, takes the SAME route even
+    though no fee was ever involved — see "MERCHANT NON-PERFORMANCE ROUTING".
 
 Decide A vs B on the evidence and continue.
 
@@ -376,15 +384,16 @@ and reads as false. The complaint deadline governs SERVICE complaints about an e
 that happened — it does not apply when no event took place. Lead only on (1)
 recognition / customer-initiated and (2) the late-cancellation fee; leave the
 complaint deadline out of the rebuttal entirely.
-EXCEPTION — LATE-CHANGE SURCHARGE STANDOFF sub-type (branch A above, e.g. Maddie
-Fuhrman): here the customer did NOT contact us before the event, did NOT confirm the
-chef's within-7-day change terms, and then alleged "the chef did not show / no service"
-only AFTER the fact — past the 12pm-next-day complaint deadline. In this sub-type the
-missed complaint deadline IS a valid supporting point (the cardholder did NOT engage in
-time), so DO include a suggested_rebuttal_point that no complaint reached us before the
-12pm-next-day deadline and that under the accepted Booking Terms/complaints policy the
-service is therefore deemed acceptable and the chef was paid. The winning stack for
-this sub-type:
+EXCEPTION — LATE-CHANGE SURCHARGE STANDOFF sub-type (branch A above): CHECK the
+first-contact timestamp before using this. IF (and only if) the record shows the
+customer did not contact us before the event and their first complaint arrived past
+the 12pm-next-day deadline, the missed complaint deadline IS a valid supporting point
+(the cardholder did NOT engage in time) — include a suggested_rebuttal_point that no
+complaint reached us before the deadline and that under the accepted Booking
+Terms/complaints policy the service is therefore deemed acceptable and the chef was
+paid. If the customer DID contact us in time, omit the deadline point entirely —
+asserting it against our own inbox reads as false and sinks the pack. The winning
+stack for this sub-type:
   (1) The customer accepted the Booking Terms at checkout (cancellation_policy_disclosure).
   (2) The customer personally made the booking and the late change(s) — their own
       platform messages — defeating any "unrecognized/unauthorized" framing
@@ -393,9 +402,11 @@ this sub-type:
       there is no refund entitlement and we may retain 100% of the Booking Price as a
       Cancellation Fee; the customer's failure to meet the agreed-change terms is a
       customer-side non-completion, not a chef no-show.
-  (4) The chef's incurred costs (ingredient receipts, timestamped prep photos, Uber
-      screenshots) = proof the Cancellation Fee is justified — framed as COST INCURRED,
-      never as "service delivered".
+  (4) The chef's incurred costs = proof the Cancellation Fee is justified — framed as
+      COST INCURRED, never as "service delivered". Use whatever cost evidence THIS
+      case actually contains (e.g. ingredient receipts, timestamped prep photos,
+      travel/rebooking screenshots) and list ONLY items that exist in the evidence —
+      never promise an exhibit type that isn't there.
   (5) No complaint by the 12pm-next-day deadline → deemed acceptable per the complaints
       policy the customer was sent before the event.
 Frame the retained amount as the non-refundable Booking Price under accepted terms after
@@ -423,9 +434,10 @@ SERVICE_RENDERED is CORRECT here as the lead — this is the one exception to th
 cancelled-case SERVICE_RENDERED bans — but the narrative MUST fork in two:
   (a) THE DELIVERED PORTION — lead with the cardholder's OWN written admissions:
       the disputed amount is LESS than the paid amount, and the self-excluded gap is
-      the cardholder's own valuation of the delivered service (e.g. "we are happy to
-      pay for the one dinner service") — their dispute arithmetic is a written
-      admission of receipt. Escalating settlement offers to pay something for the
+      the cardholder's own valuation of the delivered service (illustrative wording
+      from a PAST case: "we are happy to pay for the one dinner service" — quote only
+      THIS case's own messages, never that example) — their dispute arithmetic is a
+      written admission of receipt. Escalating settlement offers to pay something for the
       delivered service are further admissions it occurred: a VALUE negotiation, not
       non-receipt. Quote them verbatim.
   (b) THE CANCELLED REMAINDER — this is what the disputed money actually maps to,
@@ -445,10 +457,11 @@ cancelled-case SERVICE_RENDERED bans — but the narrative MUST fork in two:
       were delivered; the honesty of fork (b) is what makes fork (a) credible.
 PAYMENT-WITHHOLDING / LEVERAGE ADMISSIONS: check the correspondence for statements
 showing the dispute was filed as financial leverage rather than as a genuine
-non-receipt claim — e.g. "to protect myself financially", "I did not want the
-payment to be finalized", or filing mid-resolution after agreeing in writing to
-await our decision. Detect and QUOTE these: they prove the chargeback is
-payment-withholding, not a genuine claim that services were not received.
+non-receipt claim — illustrative wording from past cases: "to protect myself
+financially", "I did not want the payment to be finalized", or filing mid-resolution
+after agreeing in writing to await our decision. Detect and QUOTE the equivalents in
+THIS case's own record (never the illustrative wording above): they prove the
+chargeback is payment-withholding, not a genuine claim that services were not received.
 TERMINOLOGY — these receipt/leverage "admissions" (fork (a) arithmetic quotes,
 settlement offers, payment-withholding statements) are NARRATIVE ARGUMENTS for
 the rebuttal; they are NOT customer_admission_detected material. That schema
@@ -486,11 +499,13 @@ the non-delivery." Lead with:
       failure. Frame this purely as ABSENCE (see ACCESS CODES below).
   (3) The chef's payment survey = the chef ATTENDED and incurred costs for an
       abandoned event — NEVER frame it as "service completed".
-  (4) The customer's post-event conduct: the chef followed up (e.g. the next day)
-      offering to reschedule and the customer was unresponsive / went MIA, and the
-      customer raised no timely complaint — only escalating to a dispute days later.
-      That pattern is inconsistent with someone who genuinely waited for a chef who
-      never arrived, and reinforces that the non-delivery was the customer's doing.
+  (4) The customer's post-event conduct — include ONLY the elements THIS case's
+      record actually shows (any of: a chef follow-up / reschedule offer that went
+      unanswered; the customer going unresponsive; no complaint before the deadline).
+      Where present, that pattern is inconsistent with someone who genuinely waited
+      for a chef who never arrived. If the customer DID complain promptly or DID
+      respond, omit the missing element — asserting silence against the record
+      reads as false and sinks the pack.
   (5) CONTRACTUAL BASIS — under yhangry's booking terms (which the cardholder
       accepted at checkout), yhangry is entitled to retain 100% of the booking
       price as a Cancellation Fee where the customer "fail[s] to attend the
@@ -504,17 +519,20 @@ the CUSTOMER'S OWN messages admitting absence (HIGH independence). If the only p
 of attendance is the chef's word + survey, still set CUSTOMER_NO_SHOW but record the
 corroboration gap (no GPS / arrival photo) in evidence_weaknesses.
 ACCESS CODES: a chef does not let themselves into a private home to prep — they need
-the customer to admit them and be present to host. Treat any access code the customer
-sent as GATE / building access only, UNLESS the platform/email messages show the
-customer EXPLICITLY told the chef to let themselves in and start prepping in the
-customer's absence. Absent such an instruction, the chef reasonably waited to be
-admitted, and the customer's failure to appear is the cause of non-delivery. In the
-headline and rebuttal points, frame purely on the customer's ABSENCE — the chef
-attended and waited to be let in, but the customer was not present to admit them or
-host the event. Do NOT write that the customer "provided access codes" or that they
-"did not provide access" — mentioning the codes concedes a point and reads as
-self-contradictory ("not present" sitting next to "provided codes"); the gate code did
-not grant entry to the residence and the customer's presence was required regardless.
+the customer to admit them and be present to host. Where the evidence supports it,
+treat an access code the customer sent as GATE / building access only. Two checks
+before using this frame: (a) if the messages show the code opened the RESIDENCE
+itself (house door / lockbox), or (b) the customer EXPLICITLY told the chef to let
+themselves in and start prepping in the customer's absence — then do NOT use this
+frame; record it in evidence_weaknesses instead. Absent those, the chef reasonably
+waited to be admitted, and the customer's failure to appear is the cause of
+non-delivery. In the headline and rebuttal points, frame purely on the customer's
+ABSENCE — the chef attended and waited to be let in, but the customer was not present
+to admit them or host the event. Do NOT write that the customer "provided access
+codes" or that they "did not provide access" — mentioning the codes concedes a point
+and reads as self-contradictory ("not present" sitting next to "provided codes");
+where the code did not grant entry to the residence, the customer's presence was
+required regardless.
 Do NOT volunteer a chef's momentary inability to load the app / website as a "platform
 technical failure" or merchant fault — a transient connectivity glitch at a remote
 venue (especially when the code arrives last-minute with the chef already en route) is
@@ -526,25 +544,36 @@ here — NEVER the lead and NEVER the rebuttal_strategy. Lead with the chef-atte
 customer-absent substance above.
 
 MERCHANT NON-PERFORMANCE ROUTING:
-This applies ONLY to branch B — genuine MERCHANT-CAUSED non-delivery: the chef
-unilaterally changed the date/time and the customer did not agree, OR the extra fee had
-no genuine travel/logistics basis (punitive / unrelated to a customer-introduced
-change). Do NOT use this route for a customer-introduced within-7-day change where the
-chef reasonably charged for the extra travel and the customer declined — that is branch
-A (CANCELLED-THEN-CHARGED, COUNTER). Reserve this route for the clear cases where the
-CHEF broke the agreed terms.
-When chef_attendance_assessment = MERCHANT_DECLINED_TO_PERFORM, the cardholder paid in
-full for a service the chef then chose not to deliver without a policy basis. That is
-the chef breaking the contract, so the customer is entitled to a refund. Set
-recommendation = ACCEPT and rebuttal_strategy = ACCEPT_MERCHANT_NONPERFORMANCE. Do NOT
-build a counter, do NOT use DEADLINE / SERVICE_RENDERED / CUSTOMER_INITIATED /
-CUSTOMER_NO_SHOW, and do NOT attach the booking-terms / no-show exhibits — the customer
-did not cancel or fail to attend. Countering a genuine chef breach loses the money
-anyway AND damages our lost-dispute ratio, and the internal chef-coaching thread
-(advising the chef to withhold service, "don't mention the 20%", how to claim payout
-protection) must NEVER be submitted as evidence. Put the reason for accepting (chef
-moved the date / no policy basis for the fee) in evidence_weaknesses. Apply the same
-decision to BOTH sibling disputes on the booking (deposit + remainder).
+This is the route for GENUINE CHEF-FAULT NON-DELIVERY of a paid booking — any of:
+  - the chef did not show up for the event, whatever the reason (medical / emergency /
+    went MIA / double-booked — the reason matters to chef ops, not to the dispute
+    outcome);
+  - the chef cancelled and the booking could not be re-covered;
+  - the chef unilaterally changed the date/time and the customer did not agree
+    (branch B of the surcharge-standoff screen);
+  - the chef withheld service over an extra fee with no genuine travel/logistics
+    basis (branch B).
+Do NOT use this route for a customer-introduced within-7-day change where the chef
+offered reasonable revised terms and the customer declined — that is branch A
+(CANCELLED-THEN-CHARGED, COUNTER). Reserve this route for cases where the evidence
+shows OUR side caused the non-delivery.
+When chef_attendance_assessment = MERCHANT_DECLINED_TO_PERFORM, the cardholder paid
+for a service that was not delivered, and the non-delivery was our side's doing —
+the customer is entitled to a refund. Set recommendation = ACCEPT and
+rebuttal_strategy = ACCEPT_MERCHANT_NONPERFORMANCE. Do NOT build a counter, do NOT
+use DEADLINE / SERVICE_RENDERED / CUSTOMER_INITIATED / CUSTOMER_NO_SHOW, and do NOT
+attach the booking-terms / no-show exhibits — the customer did not cancel or fail to
+attend. Countering a genuine chef-fault non-delivery loses the money anyway AND
+damages our lost-dispute ratio, and any INTERNAL chef↔yhangry communications about
+the case (e.g. coaching, payout or suspension discussions, where they exist) must
+NEVER be submitted as evidence. In evidence_weaknesses, state the ACTUAL case-specific
+reason for accepting, taken from THIS case's evidence (e.g. "chef no-show on the day —
+medical emergency confirmed in the chef's own email") — never copy a reason from a
+past case. Apply the same decision to BOTH sibling disputes on the booking (deposit +
+remainder). NOTE for ops (goes in reasoning, not evidence): if the customer has
+already agreed to withdraw the dispute because we are refunding directly, the better
+path may be submitting their written withdrawal confirmation ("cardholder withdrew")
+rather than a plain accept — flag it rather than auto-accepting.
 
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
@@ -760,8 +789,8 @@ for this case. The most common yhangry strategies are:
    service-rendered/customer-initiated when the underlying issue is
    resolvable by a cardholder phone call to the issuer — formal Visa/MC
    resolution paths often fail in these patterns even with perfect
-   evidence (Katie Robertson Visa 12.5 case 2026-05-02 is the canonical
-   example).
+   evidence (past case: Katie Robertson, Visa 12.5, 2026-05-02 is the
+   reference example).
 
 1. DEADLINE ARGUMENT — customer did not complain within the T&C window,
    so the dispute is procedurally invalid regardless of substance.
@@ -847,11 +876,16 @@ the recommendation when a strong strategy exists.
   customer acknowledgement; or TIMELY_COMPLAINT with service rendered
   but specific claims partially supported.
 
-- ESCALATE: Genuine evidentiary impossibility — no winning strategy
-  available. Reserve for:
-  - Chef no-show CONFIRMED in our data (no chef survey, no day-of
-    chef messages, chef_job.status indicates cancelled/flaked) AND
-    customer complained timely.
+- ESCALATE: Genuine evidentiary impossibility or ambiguity — no
+  defensible strategy available AND no clean accept route. Reserve for:
+  - WHO-FAILED is genuinely ambiguous: the evidence conflicts on
+    whether the chef attended / who caused the non-delivery, so
+    neither a counter nor a confident chef-fault ACCEPT is safe.
+    (A chef no-show that is CONFIRMED chef-fault — no chef survey, no
+    day-of chef messages, chef admits absence, chef_job cancelled/
+    flaked — is NOT an escalate: route it to
+    MERCHANT_DECLINED_TO_PERFORM → ACCEPT, regardless of whether the
+    customer complained in time.)
   - Multiple SUPPORTED customer claims with HIGH-independence
     evidence backing the customer (rare — would need our own data
     contradicting our position).
@@ -886,7 +920,7 @@ customer_admission (admissions come only from the cardholder's own emails).
 OWN-GOALS: if the chef's emails CORROBORATE the customer's complaint (e.g. the chef
 concedes leaving early, substitutions, arriving late, or a chef-side access error),
 that is NEGATIVE evidence — put it in evidence_weaknesses, never evidence_to_include
-(Tyler rule).
+(lesson from the Tyler case).
 
 CUSTOMER ADMISSION DETECTION (from Gmail correspondence):
 The user message may include a GMAIL CORRESPONDENCE section with recent
@@ -969,7 +1003,7 @@ dispute if it plausibly refers to it:
   - Example: the cardholder emails "I have cancelled the dispute" on
     30 Apr; a NEW dispute is then filed on 3 Jun. The 30 Apr line is about
     the FIRST (already-resolved) dispute — it is NOT an admission for the
-    3 Jun dispute. (Khushbu Aggarwal, 2026-06.)
+    3 Jun dispute. (Source case: Khushbu Aggarwal, 2026-06.)
 
 When you detect an admission via (a) or (b):
   1. Set customer_admission_detected: true
@@ -1219,7 +1253,7 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
       "why_unaddressed": "one sentence on what data we'd need but don't have to address this claim"
     }
   ],
-  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER | CUSTOMER_NO_SHOW | MERCHANT_DECLINED_TO_PERFORM. EVENT_CANCELLED_BY_CUSTOMER = customer cancelled before the event so it never happened. CUSTOMER_NO_SHOW = the chef attended but the customer was absent / did not provide access, so no service occurred. MERCHANT_DECLINED_TO_PERFORM = the chef broke the agreed terms (unilaterally moved the date/time the customer didn't agree to, OR imposed an extra fee with no genuine travel/logistics basis) and withheld an already-paid service — branch B of POST-BOOKING LATE-CHANGE / SURCHARGE STANDOFF → ACCEPT. NOTE: a customer-introduced within-7-day change where the chef reasonably charged for extra travel and the customer declined is branch A = EVENT_CANCELLED_BY_CUSTOMER (COUNTER, the Maddie Fuhrman outcome), NOT this value. In the CANCELLED / NO_SHOW cases a submitted chef payment survey is a payment claim that covers incurred costs, NOT proof of attendance or service delivery. For MULTI-SERVICE bookings where at least one of several services on one payment WAS delivered before the customer cancelled the remainder, use CONFIRMED (not EVENT_CANCELLED_BY_CUSTOMER — a service genuinely happened) and set multi_service_partial_delivery = true (see MULTI-SERVICE PARTIAL-DELIVERY ROUTING).",
+  "chef_attendance_assessment": "CONFIRMED | LIKELY | UNCONFIRMED | NO_SHOW | EVENT_CANCELLED_BY_CUSTOMER | CUSTOMER_NO_SHOW | MERCHANT_DECLINED_TO_PERFORM. EVENT_CANCELLED_BY_CUSTOMER = customer cancelled before the event so it never happened. CUSTOMER_NO_SHOW = the chef attended but the customer was absent / did not provide access, so no service occurred. MERCHANT_DECLINED_TO_PERFORM = ANY genuine chef-fault non-delivery of a paid booking: the chef did not show up (any reason, incl. medical/emergency/MIA), the chef cancelled and the booking was not re-covered, the chef unilaterally moved the date/time without customer agreement, or the chef withheld service over an extra fee with no genuine travel/logistics basis — see MERCHANT NON-PERFORMANCE ROUTING → ACCEPT. NOTE: a customer-introduced within-7-day change where the chef reasonably charged for extra travel and the customer declined is branch A = EVENT_CANCELLED_BY_CUSTOMER (COUNTER — branch A; source case: Maddie Fuhrman), NOT this value. In the CANCELLED / NO_SHOW cases a submitted chef payment survey is a payment claim that covers incurred costs, NOT proof of attendance or service delivery. For MULTI-SERVICE bookings where at least one of several services on one payment WAS delivered before the customer cancelled the remainder, use CONFIRMED (not EVENT_CANCELLED_BY_CUSTOMER — a service genuinely happened) and set multi_service_partial_delivery = true (see MULTI-SERVICE PARTIAL-DELIVERY ROUTING).",
   "rebuttal_strategy": "REQUIRED — the strongest defensible counter-strategy you chose. One of: DEADLINE | SERVICE_RENDERED | CUSTOMER_INITIATED | CUSTOMER_NO_SHOW | CLAIM_BY_CLAIM | PRE_EVENT_CONTACT | CUSTOMER_OUTREACH | ACCEPT_STOLEN_CARD | ACCEPT_MERCHANT_NONPERFORMANCE. CUSTOMER_NO_SHOW = chef attended but the cardholder was absent / failed to provide access, so no service occurred (see CUSTOMER-NO-SHOW ROUTING). ACCEPT_STOLEN_CARD is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH. ACCEPT_MERCHANT_NONPERFORMANCE is mandatory when chef_attendance_assessment = MERCHANT_DECLINED_TO_PERFORM (see MERCHANT NON-PERFORMANCE ROUTING). PRE_EVENT_CONTACT is mandatory when is_pre_event=true and the dispute is not a fraud code. CUSTOMER_OUTREACH is chosen for genuine-confusion / non-fraud post-event patterns (Visa 12.5 FX, credit_not_processed without bad faith, forgot-they-booked unrecognized charges) — see CUSTOMER OUTREACH RULES. SERVICE_RENDERED is also the correct lead for multi-service partial-delivery cases (delivered portion rendered + cancelled remainder = 100% Cancellation Fee — see MULTI-SERVICE PARTIAL-DELIVERY ROUTING).",
   "evidence_strength": "STRONG | MODERATE | WEAK | N/A. Use N/A only when recommendation is ACCEPT (no submission is being prepared).",
   "recommendation": "ACCEPT | STRONG_COUNTER | COUNTER_WITH_CAVEATS | CUSTOMER_CONTACT_FIRST | ESCALATE. ACCEPT is mandatory when STOLEN-CARD SIGNAL verdict is STRONG_MATCH OR when rebuttal_strategy is ACCEPT_MERCHANT_NONPERFORMANCE. CUSTOMER_CONTACT_FIRST is mandatory when rebuttal_strategy is PRE_EVENT_CONTACT OR CUSTOMER_OUTREACH.",
@@ -1475,7 +1509,7 @@ function formatFxSignature(sig) {
   lines.push(``);
   if (sig.verdict === 'STRONG_MATCH') {
     lines.push(
-      'STRONG_MATCH — recommend CUSTOMER_OUTREACH. This is the Katie Robertson pattern: processing-error code + cross-border card + partial dispute in FX-gap range. Formal Visa/MC resolution typically loses on this even with perfect evidence — the realistic win path is the cardholder phoning their issuer to withdraw. Set rebuttal_strategy: CUSTOMER_OUTREACH, recommendation: CUSTOMER_CONTACT_FIRST, draft suggested_customer_email per CUSTOMER OUTREACH RULES, keep evidence_to_include light (fallback pack only).'
+      'STRONG_MATCH — recommend CUSTOMER_OUTREACH. This is the FX-gap withdrawal pattern (source case: Katie Robertson): processing-error code + cross-border card + partial dispute in FX-gap range. Formal Visa/MC resolution typically loses on this even with perfect evidence — the realistic win path is the cardholder phoning their issuer to withdraw. Set rebuttal_strategy: CUSTOMER_OUTREACH, recommendation: CUSTOMER_CONTACT_FIRST, draft suggested_customer_email per CUSTOMER OUTREACH RULES, keep evidence_to_include light (fallback pack only).'
     );
   } else if (sig.verdict === 'PARTIAL_MATCH') {
     lines.push(

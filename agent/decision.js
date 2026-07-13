@@ -144,37 +144,50 @@ function buildStripeFormGuidance(dispute, analysis, booking) {
   // outrank isRendered (attendance is CONFIRMED by design in this archetype).
   const isMultiService = analysis?.multi_service_partial_delivery === true;
 
-  let winLabel, winOther;
+  // TEMPLATE DISCIPLINE (Lawrence Suen lesson, 2026-07-11): every paste string
+  // below may only assert facts guaranteed true for EVERY case on its branch.
+  // Anything case-contingent is expressed as a "verify first" instruction, not
+  // as an answer. Never bake one exemplar's facts into these strings.
+  let winLabel, winOther, winVerify;
   if (isMultiService) {
     winLabel = '"Other"';
-    winOther = 'Multi-service booking: the first service was delivered — conceded by the cardholder\'s own partial-dispute arithmetic and written offers to pay for it; the cardholder then cancelled the remaining services within the non-refundable window, so the disputed amount is the agreed 100% cancellation fee under our booking terms.';
+    winOther = 'Multi-service booking: the delivered portion is not what is in dispute — the cardholder cancelled the remaining services, and the disputed amount is the cancellation fee under the booking terms accepted at checkout.';
+    winVerify = 'before pasting, confirm from THIS case\'s evidence which services were delivered and that the cancellation fell inside the no-refund window — then adapt the wording to those facts.';
   } else if (isRendered) {
     winLabel = '"The cardholder received the product or service"';
   } else if (isNoShow) {
     winLabel = '"Other"';
     winOther = 'Customer no-show — the chef attended and was ready to perform at the agreed time; the cardholder was not present to receive the service.';
+    winVerify = 'before pasting, confirm the chef-attendance evidence (survey, day-of messages, photos) is actually in the pack.';
   } else if (isCancelled) {
     winLabel = '"Other"';
-    winOther = 'The cardholder personally booked this and then cancelled within the non-refundable window; the amount is the agreed cancellation fee under our booking terms.';
+    winOther = 'The cardholder personally booked this service and then cancelled it; under the booking terms accepted at checkout, the amount charged is the applicable cancellation fee.';
+    winVerify = 'before pasting, check WHEN the customer cancelled against the 7-day window — only assert the 100% fee if the cancellation was inside it; if it was outside, stop and escalate (the fee itself may be wrong).';
   } else if (strat === 'CUSTOMER_INITIATED') {
     winLabel = '"Other"';
-    winOther = 'The cardholder personally made and authorised this booking through their own account; the payment passed CVC and billing-postcode checks. This is not an unrecognised or unauthorised charge.';
+    winOther = 'The cardholder personally made and authorised this booking through their own account. This is not an unrecognised or unauthorised charge.';
+    winVerify = 'open the payment in Stripe first — if the CVC and postcode checks actually show "passed", add a sentence saying so; if not, leave it out (the issuer sees the real check results on the authorisation).';
   } else {
+    // Unrecognised strategy (including any added after this was written).
+    // Deliberately NO canned answer — a wrong canned answer here is exactly
+    // how the Maddie fee-standoff text got stamped onto a medical no-show.
     winLabel = '"Other"';
-    winOther = 'The service was provided as booked and the cardholder did not raise a timely complaint.';
+    winOther = null;
+    winVerify = 'no canned answer exists for this strategy — write the "Other" box from THIS case\'s verified facts (see *Reasoning* above), and flag in-thread that the cheat-sheet needs a template for this strategy.';
   }
 
   const lines = [];
   lines.push(`• *Why should you win:* ${winLabel}`);
   if (winOther) lines.push(`     ↳ in the "Other" box, paste: _${winOther}_`);
+  if (winVerify) lines.push(`     ↳ :warning: ${winVerify}`);
   lines.push('• *Product / service type:* "Offline service" (or "Booking or reservation")');
   if (booking?.order_id) lines.push(`• *Booking number:* ${booking.order_id}`);
   lines.push(`• *Booking status* (if asked): *${(isCancelled || isMultiService) ? 'Cancelled' : 'Active'}*`);
   if (booking?.event_date) lines.push(`• *Booking start date:* ${formatEventDate(booking.event_date)}`);
-  lines.push('• *Offered a credit or voucher:* No');
+  lines.push('• *Offered a credit or voucher:* check Nova/Conduit for any goodwill credit, gift card or partial refund on this booking and answer honestly — a false "No" is discoverable by the issuer and sinks the pack\'s credibility (fatal on credit-not-processed codes).');
   lines.push((isNoShow || isCancelled || isMultiService)
-    ? '• *Showed refund & cancellation terms:* Yes → the booking-terms page is already in the generated PDF; tag that upload category *"Refund & cancellation policy"*.'
-    : '• *Showed refund & cancellation terms:* Yes (accepted at checkout) — attach the booking-terms page as *"Refund & cancellation policy"* if submitting it.');
+    ? '• *Showed refund & cancellation terms:* Yes — agreement to the Booking Terms is a required checkout step; the booking-terms page is already in the generated PDF; tag that upload category *"Refund & cancellation policy"*.'
+    : '• *Showed refund & cancellation terms:* Yes — agreement to the Booking Terms is a required checkout step ("By continuing, I agree to the yhangry booking terms"); attach the booking-terms page as *"Refund & cancellation policy"* if submitting it.');
 
   return lines.join('\n');
 }
@@ -358,21 +371,35 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
           text: `:no_bell: *MERCHANT NON-PERFORMANCE — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute*; do NOT counter. The cardholder paid for a service our chef failed to deliver — to the issuing bank this is "services not received" regardless of the reason on our side, and internal policy language does not bind them. Countering loses the money anyway and hurts our lost-dispute ratio. Do NOT submit booking-terms/no-show exhibits or any internal chef↔yhangry threads. See *Reasoning* below for what happened in this specific case; any partial-cost recovery is a goodwill or chef-clawback conversation, not a formal counter.${overrideNote}`,
         },
       });
-    } else {
+    } else if (analysis._fraud_signature?.verdict === 'STRONG_MATCH') {
+      // Stolen-card banner — ONLY when the deterministic fraud signature
+      // actually fired STRONG_MATCH. Signal bits are built from the signals
+      // that fired, never asserted statically.
       const sig = analysis._fraud_signature;
-      const signalBits = sig
-        ? [
-            `issuer ${sig.issuerCountry || 'unknown'} on ${(sig.expectedCountry || 'unknown')} Stripe account`,
-            'no billing address',
-            `Stripe Radar ${sig.riskLevel || 'unknown'} risk`,
-            'fraud reason code',
-          ].join(' · ')
-        : '';
+      const signalBits = [
+        sig.signals?.foreign_card ? `issuer ${sig.issuerCountry || 'unknown'} on ${sig.expectedCountry || 'unknown'} Stripe account` : null,
+        sig.signals?.no_address ? 'no billing address' : null,
+        sig.signals?.elevated_risk ? `Stripe Radar ${sig.riskLevel || 'elevated'} risk` : null,
+        sig.signals?.fraud_code ? 'fraud reason code' : null,
+      ].filter(Boolean).join(' · ');
       blocks.push({
         type: 'section',
         text: {
           type: 'mrkdwn',
           text: `:stop_sign: *STOLEN-CARD FRAUD — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute* in the Stripe dashboard; do NOT counter. The legitimate cardholder did not authorise this charge, so platform-engagement evidence cannot rebut their claim — countering costs the same money and damages our merchant lost-dispute ratio.${signalBits ? `\n_Signals fired: ${signalBits}._` : ''}${overrideNote}`,
+        },
+      });
+    } else {
+      // Generic ACCEPT — any accept that is neither merchant non-performance
+      // nor a STRONG_MATCH fraud signature. Deliberately fact-free: the reason
+      // varies by case and lives in *Reasoning*. (Before 2026-07-11 this path
+      // fell into the stolen-card banner and asserted fraud facts that never
+      // fired — same failure class as the Lawrence Suen incident.)
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `:stop_sign: *ACCEPT RECOMMENDED — do NOT counter.* Click *Accept dispute* in the Stripe dashboard. See *Reasoning* below for the case-specific grounds; this banner intentionally states none, because the reason varies by case.${overrideNote}`,
         },
       });
     }
@@ -391,7 +418,7 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `:writing_hand: *CARDHOLDER ADMISSION DETECTED* — the strongest possible counter-evidence. Banks rule for the merchant almost every time when the cardholder has admitted in writing.\n> _"${quote}"_\nThe PDF will lead with this admission as the primary argument.`,
+        text: `:writing_hand: *CARDHOLDER ADMISSION DETECTED* — the strongest counter-evidence we can hold. A written admission materially strengthens the counter, but it is not a guarantee: we have lost a Visa 13.1 no-show at the bank despite the customer's own written absence admission — some reason codes only ask whether the service was physically received.\n> _"${quote}"_\nThe PDF will lead with this admission as the primary argument.`,
       },
     });
   }
