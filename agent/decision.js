@@ -441,6 +441,54 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     });
   }
 
+  // Post-event tip banner (source case: Trey Quan archetype, 2026-07) —
+  // a voluntary tip given on/after the event is leading deemed-acceptance
+  // evidence on "not as described" codes. Two gates, mirroring the admission
+  // banner: the LLM-detected written confirmation (quoted verbatim), or the
+  // deterministic platform tip record. Never rendered without one of them.
+  if (analysis.post_event_tip_detected && analysis.post_event_tip_evidence) {
+    const tipQuote = truncateForSlackSection(
+      String(analysis.post_event_tip_evidence).trim().replace(/\n+/g, ' '),
+      1500
+    );
+    const srcLabel =
+      analysis.post_event_tip_source === 'transactions'
+        ? 'platform tip record'
+        : analysis.post_event_tip_source === 'platform_message'
+          ? 'cardholder platform message'
+          : analysis.post_event_tip_source === 'customer_email'
+            ? 'cardholder email'
+            : 'written confirmation';
+    // Copy is gated on the reason code — this field can legitimately fire on
+    // any code (the detection rules are code-agnostic), and the banner must
+    // only claim "not as described" when that is actually the dispute type.
+    const isNadCode =
+      ['13.3', 'C31'].includes(dispute?.network_reason_code) ||
+      dispute?.reason === 'product_unacceptable';
+    const tipUse = isNadCode
+      ? 'On this not-as-described code, lead any counter with it alongside the deadline analysis — strong deemed-acceptance evidence, not a guarantee.'
+      : 'On a not-as-described code this would be the leading argument; on this code it still corroborates satisfaction and engagement with the service — supporting evidence, not a guarantee.';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:gift: *POST-EVENT TIP DETECTED* (${srcLabel}) — the cardholder voluntarily tipped on/after the service in dispute. ${tipUse}\n> _"${tipQuote}"_\nPack sourcing: quote the tip clause verbatim from the published complaints page (yhangry.com/complaints) — NEVER present it as checkout-accepted; the deadline / deemed-acceptance / no-refund-obligation clauses are the checkout-accepted Booking Terms citations.`,
+      },
+    });
+  } else if (analysis._tip_signature?.verdict === 'TIP_AFTER_EVENT') {
+    const tips = (analysis._tip_signature.tips || []).filter((tp) => tp.on_or_after_event);
+    const tipBits = tips
+      .map((tp) => `${tp.amount != null ? tp.amount.toFixed(2) : '?'} ${(tp.currency || '').toUpperCase()} on ${tp.created_iso ? tp.created_iso.slice(0, 10) : 'unknown date'}`)
+      .join(', ');
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:gift: *POST-EVENT TIP ON RECORD* — the platform shows a tip added on/after the event date (${tipBits}). On a not-as-described code this is leading deemed-acceptance evidence — include it in any counter. Pack sourcing: quote the tip clause verbatim from the published complaints page (yhangry.com/complaints) — NEVER present it as checkout-accepted; the deadline / deemed-acceptance clauses are the checkout-accepted Booking Terms citations.`,
+      },
+    });
+  }
+
   // Multi-service partial-delivery banner (Tatiana Hakim archetype) — ONE
   // payment covered several distinct services/dates, at least one was
   // delivered, and the cardholder cancelled the rest. The counter must argue

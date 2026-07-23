@@ -356,6 +356,7 @@ const visa_13_3 = {
   strengthening_evidence: [
     'substitution_consent',                // customer agreed to any menu changes in writing
     'post_event_customer_acknowledgment',  // customer thanked chef / left positive review
+    'post_event_tip',                      // voluntary tip on/after the event = deemed acceptance
     'chef_arrival_communication',          // day-of comms showing chef was working
     'cancellation_policy_disclosure',      // T&Cs link in evidence pack
     'refund_policy_disclosure',
@@ -374,6 +375,8 @@ const visa_13_3 = {
       'CURRENTLY MISSING — chef substitutions during the event (e.g. "the seafood was not fresh, I substituted X") are typically captured only in the chef\'s after-the-fact email to ops, which is LOW or NEGATIVE independence. The customer\'s consent to the substitution is rarely captured anywhere queryable. Future product work: in-app "substitution requested by chef → customer accepts" flow.',
     post_event_customer_acknowledgment:
       'Platform messages from customer post-event, post-event Aircall calls (with content unverifiable), customer reviews.',
+    post_event_tip:
+      'Deterministic TIP / GRATUITY RECORD section (platform tip transactions), or the cardholder\'s OWN written confirmation of an off-platform tip (platform message / email — verbatim quote). A voluntary post-event tip is leading deemed-acceptance evidence. Tip-clause sourcing: the tip clause lives on the published complaints page (yhangry.com/complaints) — quote verbatim there, NEVER present it as checkout-accepted; deadline/deemed-acceptance clauses are the checkout-accepted Booking Terms citations.',
     chef_arrival_communication:
       'Platform messages from chef on event day.',
     cancellation_policy_disclosure:
@@ -819,6 +822,7 @@ const amex_C31 = {
   strengthening_evidence: [
     'substitution_consent',
     'post_event_customer_acknowledgment',
+    'post_event_tip',
     'chef_arrival_communication',
     'cancellation_policy_disclosure',
   ],
@@ -831,12 +835,14 @@ const amex_C31 = {
     service_delivery_proof: 'Same caveats as Visa 13.3 — treat generic chef payout photos as suspect.',
     substitution_consent: 'Same gap as 13.3 — chef-side substitution admissions are NEGATIVE evidence (own-goal).',
     post_event_customer_acknowledgment: 'Customer post-event messages, reviews.',
+    post_event_tip:
+      'Deterministic TIP / GRATUITY RECORD section (platform tip transactions), or the cardholder\'s OWN written confirmation of an off-platform tip (platform message / email — verbatim quote). A voluntary post-event tip is leading deemed-acceptance evidence on this code. Tip-clause sourcing: the tip clause lives on the published complaints page (yhangry.com/complaints) — quote verbatim there, NEVER present it as checkout-accepted; deadline/deemed-acceptance clauses are the checkout-accepted Booking Terms citations.',
     chef_arrival_communication: 'Day-of platform messages from chef.',
     cancellation_policy_disclosure: 'yhangry.com/booking-terms',
   },
 
   notes:
-    'Same playbook as Visa 13.3 (see that code\'s past-case lesson). Include the checkout terms-acceptance screenshot by default; route any chef-admitted substitution/early-leave to evidence_weaknesses, not evidence_to_include.',
+    'Same playbook as Visa 13.3 (see that code\'s past-case lesson). Include the checkout terms-acceptance screenshot by default; route any chef-admitted substitution/early-leave to evidence_weaknesses, not evidence_to_include. Full-value C31 chargebacks are sometimes settlement leverage after a partial-refund negotiation stalls (source case pattern: quality complaint + post-event tip + missed complaint deadline) — the deadline analysis and any post-event tip carry the counter.',
 };
 
 const amex_C05 = {

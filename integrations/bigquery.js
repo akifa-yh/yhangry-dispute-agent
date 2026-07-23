@@ -215,6 +215,25 @@ export async function getPlatformMessages(orderId) {
   return rows;
 }
 
+/**
+ * Tip/gratuity transactions on a booking (transactions.type = '10' — the
+ * numeric-coded STRING for chef tips). Feeds the post-event-tip signal
+ * (source case: Trey Quan, 2026-07): a voluntary tip added on/after the
+ * event is strong deemed-acceptance evidence on "not as described" codes.
+ * Only platform-recorded tips appear here — off-platform tips can still be
+ * evidenced by the cardholder's own written confirmation (prompt rules).
+ */
+export async function getTipTransactionsForOrder(orderId) {
+  const query = `
+    SELECT id, amount, currency, created_at
+    FROM ${t('transactions')}
+    WHERE order_id = @orderId AND type = '10'
+    ORDER BY created_at ASC
+  `;
+  const [rows] = await bigquery.query({ query, params: { orderId } });
+  return rows;
+}
+
 // === Product gap tracking ===
 // All gated on PRODUCT_GAPS_ENABLED env var. When false, these are no-ops
 // (writes return undefined, reads return safe defaults) so callers don't

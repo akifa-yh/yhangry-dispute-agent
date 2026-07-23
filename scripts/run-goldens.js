@@ -65,6 +65,16 @@ check('review-thread ts destructured from coords, not passed raw', server.includ
 check('settled-after-block outranks blocked verdict', stripeIntegration.includes("verdict = 'REFUND_SETTLED';"));
 check('reasoning+flags block is length-guarded', decision.includes('truncateForSlackSection'));
 
+// Post-event tip training (2026-07-24, source case: Trey Quan archetype)
+const agentIndex = readFileSync(path.join(ROOT, 'agent/index.js'), 'utf8');
+const matrixSrc = matrix;
+check('prompt carries post-event tip rules', prompt.includes('POST-EVENT TIP DETECTION & USE'));
+check('tip clause never presented as checkout-accepted', prompt.includes('NEVER present it as checkout-accepted'));
+check('tip banner gated on LLM evidence', decision.includes('analysis.post_event_tip_detected && analysis.post_event_tip_evidence'));
+check('deterministic tip banner gated on signature', decision.includes("_tip_signature?.verdict === 'TIP_AFTER_EVENT'"));
+check('matrix maps post_event_tip evidence', matrixSrc.includes('post_event_tip:'));
+check('transactions-sourced tip claims are cross-checked', agentIndex.includes("post_event_tip_source === 'transactions'"));
+
 // ---------------------------------------------------------------------------
 // 2. Behavioural goldens
 // ---------------------------------------------------------------------------
@@ -166,6 +176,51 @@ try {
   check('refund-blocked accept → never claims refund settled', !withSig.includes('refund has been issued') && !withSig.includes('refund completed'));
   check('plain accept → no refund story fabricated', !withoutSig.includes('refund already FAILED'));
 } catch (e) { check('refund-blocked accept renders', false, e.message); }
+
+// Post-event tip: LLM-evidenced banner, deterministic banner, and gating
+try {
+  const counterBase = {
+    recommendation: 'STRONG_COUNTER', rebuttal_strategy: 'CUSTOMER_INITIATED',
+    chef_attendance_assessment: 'UNCONFIRMED', evidence_strength: 'STRONG',
+    _fraud_signature: { verdict: 'NO_MATCH', signals: {} },
+  };
+  const llmTip = render({
+    ...counterBase,
+    post_event_tip_detected: true,
+    post_event_tip_evidence: 'I did tip the chef after the dinner',
+    post_event_tip_source: 'customer_email',
+  });
+  const detTip = render({
+    ...counterBase,
+    _tip_signature: { verdict: 'TIP_AFTER_EVENT', event_date: '2026-07-08', tips: [{ amount: 100, currency: 'usd', created_iso: '2026-07-09T01:00:00.000Z', on_or_after_event: true }] },
+  });
+  const noTip = render(counterBase);
+  const preTip = render({
+    ...counterBase,
+    _tip_signature: { verdict: 'TIP_RECORDED_PRE_EVENT', event_date: '2026-07-08', tips: [{ amount: 50, currency: 'usd', created_iso: '2026-07-01T01:00:00.000Z', on_or_after_event: false }] },
+  });
+  check('written tip → tip banner with quote', llmTip.includes('POST-EVENT TIP DETECTED') && llmTip.includes('I did tip the chef'));
+  check('written tip → calibrated, not a guarantee', llmTip.includes('not a guarantee'));
+  check('written tip → complaints-page sourcing rule', llmTip.includes('complaints'));
+  // Non-NAD code: the banner must not claim the dispute is "not as described"
+  const render131 = (a) => JSON.stringify(formatSlackMessage(
+    { ...baseAnalysis, ...a },
+    { ...baseDispute, network_reason_code: '13.1', reason: 'product_not_received' },
+    baseBooking
+  ));
+  const llmTip131 = render131({
+    ...counterBase,
+    post_event_tip_detected: true,
+    post_event_tip_evidence: 'I did tip the chef after the dinner',
+    post_event_tip_source: 'customer_email',
+  });
+  check('tip banner on non-NAD code → renders without NAD claim', llmTip131.includes('POST-EVENT TIP DETECTED') && !llmTip131.includes('On this not-as-described code'));
+  check('tip banner on non-NAD code → corroboration framing', llmTip131.includes('corroborates satisfaction'));
+  check('tip banner on NAD code → lead-the-counter framing', llmTip.includes('On this not-as-described code, lead any counter'));
+  check('platform tip → deterministic banner with amount', detTip.includes('POST-EVENT TIP ON RECORD') && detTip.includes('100.00 USD'));
+  check('no tip data → no tip banner fabricated', !noTip.includes('POST-EVENT TIP'));
+  check('pre-event tip → no acceptance argument fabricated', !preTip.includes('POST-EVENT TIP'));
+} catch (e) { check('post-event tip renders', false, e.message); }
 
 console.log('');
 if (failures) {

@@ -13,6 +13,7 @@ import { SYSTEM_PROMPT, buildUserMessage } from './prompt.js';
 import { lookupMatrixEntry } from './evidence_matrix.js';
 import { computeFraudSignature } from './fraud_signature.js';
 import { computeFxDisputeSignature } from './fx_dispute_signature.js';
+import { computeTipSignature } from './tip_signature.js';
 
 function normalisePhoneForLookup(phone, postcode) {
   if (!phone) return null;
@@ -417,6 +418,23 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.error('[agent] Refund history lookup failed (non-fatal):', err.message);
   }
 
+  // Step 5h: Tip/gratuity record on the booking (source case: Trey Quan,
+  // 2026-07). A voluntary tip added on/after the event is strong
+  // deemed-acceptance evidence on "not as described" codes. Deterministic
+  // for platform-recorded tips; off-platform tips are detected by the
+  // prompt from the cardholder's own written confirmations. Non-fatal → null.
+  let tipSignature = null;
+  try {
+    tipSignature = await computeTipSignature({ ...booking, event_date: eventDateStr });
+    if (tipSignature) {
+      console.log(
+        `[agent] Tip record: verdict=${tipSignature.verdict} (${tipSignature.tips.length} platform tip(s))`
+      );
+    }
+  } catch (err) {
+    console.error('[agent] Tip record lookup failed (non-fatal):', err.message);
+  }
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -441,6 +459,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     fraudSignature,
     fxSignature,
     refundSignature,
+    tipSignature,
     searchStatus,
   });
 
@@ -568,6 +587,34 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
 
   if (fxSignature) {
     analysis._fx_signature = fxSignature;
+  }
+
+  // Stash the tip record unconditionally (forged-key defense, same as the
+  // refund signature) and cross-check the LLM's tip claim against the
+  // deterministic record: a 'transactions'-sourced tip claim that the
+  // platform record does not back is stripped, never rendered.
+  analysis._tip_signature = tipSignature || null;
+  if (
+    analysis.post_event_tip_detected &&
+    analysis.post_event_tip_source === 'transactions' &&
+    tipSignature?.verdict !== 'TIP_AFTER_EVENT'
+  ) {
+    console.warn(
+      '[agent] LLM claimed a transactions-sourced post-event tip but the platform record disagrees — stripping the claim'
+    );
+    analysis.post_event_tip_detected = false;
+    analysis.post_event_tip_evidence = '';
+    analysis.post_event_tip_source = null;
+    analysis.flags = [
+      ...(analysis.flags || []),
+      'The model claimed a platform-recorded post-event tip that the deterministic tip record does not back — the claim was stripped. If a tip was confirmed in the customer\'s own written words instead, re-check the correspondence before using it.',
+    ];
+  }
+  if (tipSignature?.verdict === 'TIP_AFTER_EVENT') {
+    analysis.flags = [
+      ...(analysis.flags || []),
+      'Platform-recorded tip added on/after the event date (see the tip banner). On a not-as-described code this is leading deemed-acceptance evidence — include it in any counter, and cite the tip clause from the published complaints page (never as checkout-accepted).',
+    ];
   }
 
   // Stash refund history for decision.js (banner add-on) and add a

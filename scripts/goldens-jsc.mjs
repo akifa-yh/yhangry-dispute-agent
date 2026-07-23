@@ -100,4 +100,47 @@ try {
   check('plain accept -> no refund story fabricated', !withoutSig.includes('refund already FAILED'));
 } catch (e) { failures++; print('FAIL refund-blocked accept renders — ' + e); }
 
+try {
+  const counterBase = {
+    recommendation: 'STRONG_COUNTER', rebuttal_strategy: 'CUSTOMER_INITIATED',
+    chef_attendance_assessment: 'UNCONFIRMED', evidence_strength: 'STRONG',
+    _fraud_signature: { verdict: 'NO_MATCH', signals: {} },
+  };
+  const llmTip = render({
+    ...counterBase,
+    post_event_tip_detected: true,
+    post_event_tip_evidence: 'I did tip the chef after the dinner',
+    post_event_tip_source: 'customer_email',
+  });
+  const detTip = render({
+    ...counterBase,
+    _tip_signature: { verdict: 'TIP_AFTER_EVENT', event_date: '2026-07-08', tips: [{ amount: 100, currency: 'usd', created_iso: '2026-07-09T01:00:00.000Z', on_or_after_event: true }] },
+  });
+  const noTip = render(counterBase);
+  const preTip = render({
+    ...counterBase,
+    _tip_signature: { verdict: 'TIP_RECORDED_PRE_EVENT', event_date: '2026-07-08', tips: [{ amount: 50, currency: 'usd', created_iso: '2026-07-01T01:00:00.000Z', on_or_after_event: false }] },
+  });
+  check('written tip -> tip banner with quote', llmTip.includes('POST-EVENT TIP DETECTED') && llmTip.includes('I did tip the chef'));
+  check('written tip -> calibrated, not a guarantee', llmTip.includes('not a guarantee'));
+  check('written tip -> complaints-page sourcing rule', llmTip.includes('complaints'));
+  const render131 = (a) => JSON.stringify(formatSlackMessage(
+    { ...baseAnalysis, ...a },
+    { ...baseDispute, network_reason_code: '13.1', reason: 'product_not_received' },
+    baseBooking
+  ));
+  const llmTip131 = render131({
+    ...counterBase,
+    post_event_tip_detected: true,
+    post_event_tip_evidence: 'I did tip the chef after the dinner',
+    post_event_tip_source: 'customer_email',
+  });
+  check('tip banner on non-NAD code -> renders without NAD claim', llmTip131.includes('POST-EVENT TIP DETECTED') && !llmTip131.includes('On this not-as-described code'));
+  check('tip banner on non-NAD code -> corroboration framing', llmTip131.includes('corroborates satisfaction'));
+  check('tip banner on NAD code -> lead-the-counter framing', llmTip.includes('On this not-as-described code, lead any counter'));
+  check('platform tip -> deterministic banner with amount', detTip.includes('POST-EVENT TIP ON RECORD') && detTip.includes('100.00 USD'));
+  check('no tip data -> no tip banner fabricated', !noTip.includes('POST-EVENT TIP'));
+  check('pre-event tip -> no acceptance argument fabricated', !preTip.includes('POST-EVENT TIP'));
+} catch (e) { failures++; print('FAIL post-event tip renders — ' + e); }
+
 print(failures ? `${failures} golden failure(s)` : 'goldens-jsc: ALL OK');

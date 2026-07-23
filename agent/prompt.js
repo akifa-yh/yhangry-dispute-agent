@@ -1060,6 +1060,53 @@ customer_admission_detected: false and leave customer_admission_evidence
 empty/null. Do NOT fabricate admissions or paraphrase yhangry's own
 statements as cardholder words.
 
+POST-EVENT TIP DETECTION & USE:
+A voluntary tip given by the cardholder ON or AFTER the event is strong
+deemed-acceptance evidence on "not as described" / quality codes (Amex C31,
+Visa 13.3, product_unacceptable): cardholders do not voluntarily tip for a
+service they consider not as described. Detect it from EXACTLY these sources:
+  (a) DETERMINISTIC — the TIP / GRATUITY RECORD section (platform-recorded
+      tip transactions). TIP_AFTER_EVENT there is deterministic proof that a
+      platform tip was recorded on/after the event date; as an argument it is
+      strong deemed-acceptance evidence — not proof and not a guarantee.
+  (b) WRITTEN — the cardholder's OWN words in GMAIL CORRESPONDENCE or
+      PLATFORM MESSAGES confirming they tipped (tips are often paid
+      off-platform and never appear in the platform record). Same standard
+      as admissions: cardholder-authored only, quoted verbatim. A chef-side
+      claim that "the customer tipped me" is NOT sufficient on its own —
+      mention it in reasoning as unverified, keep the field false.
+When detected:
+  1. Set post_event_tip_detected: true, quote the evidence verbatim (or cite
+     the transaction: amount + date) in post_event_tip_evidence, and set
+     post_event_tip_source to 'transactions', 'platform_message' or
+     'customer_email'.
+  2. On not-as-described codes, make it a LEADING argument alongside the
+     deadline analysis (add to suggested_rebuttal_points and
+     evidence_to_include with strategic_priority PRIMARY). If a customer
+     admission is ALSO detected, the admission remains THE leading argument
+     (per CUSTOMER ADMISSION DETECTION) — the tip is the immediate
+     supporting point after it.
+  3. If the DISPUTED AMOUNT includes a platform-recorded tip, decompose the
+     amount in the rebuttal: the tip portion is a voluntary post-service
+     payment — by definition recognised and authorised — and must be argued
+     separately from the service portion.
+Guards:
+  - A tip that PRE-DATES the event proves nothing about delivery — set
+    post_event_tip_detected: false and do not argue acceptance from it.
+  - Never infer a tip from amounts alone; no written confirmation + no
+    platform record = false. NEVER fabricate.
+TIP-CLAUSE PAGE-SOURCE RULES (critical for pack honesty):
+  - yhangry's tip clause ("if you tip the chef, we will be unable to help
+    you with a resolution") is published on the COMPLAINTS PROCESS page
+    (yhangry.com/complaints). It is NOT part of the checkout-accepted
+    Booking Terms — quote it verbatim, attribute it to the published
+    complaints page, and NEVER present it as checkout-accepted or as a
+    clause the cardholder agreed to at purchase.
+  - The complaint deadline, deemed-acceptance and no-refund-obligation
+    clauses ARE in the checkout-accepted Booking Terms
+    (yhangry.com/booking-terms, RESOLVING ISSUES) — cite those as
+    checkout-accepted.
+
 MULTIPLE DISPUTES ON ONE PAYMENT:
 The user message may include a PRIOR DISPUTES ON THIS PAYMENT section. A
 single payment can be disputed more than once, often under DIFFERENT
@@ -1335,6 +1382,9 @@ OUTPUT: Respond ONLY with valid JSON. No preamble outside the JSON.
   "product_gaps_identified": ["zero or more of: missing_click_to_accept_timestamp | no_chef_gps_at_venue | no_chef_arrival_photo | no_signed_substitution_consent | no_post_event_review_capture | chef_payout_photo_unusable | customer_acknowledgment_not_captured. Emit only when the gap was material to THIS dispute (see PRODUCT GAP TAGGING rules above). Empty array if none apply."],
   "customer_admission_detected": "boolean. TRUE only when the GMAIL CORRESPONDENCE section contains an explicit written admission from the cardholder (per CUSTOMER ADMISSION DETECTION rules above). NEVER fabricate.",
   "customer_admission_evidence": "string — the exact quoted admission text (1-2 sentences). Empty string when customer_admission_detected is false.",
+  "post_event_tip_detected": "boolean. TRUE only when a tip given ON/AFTER the event is evidenced by the TIP / GRATUITY RECORD section (verdict TIP_AFTER_EVENT) or by the cardholder's OWN written confirmation (per POST-EVENT TIP DETECTION & USE). NEVER fabricate.",
+  "post_event_tip_evidence": "string — the verbatim cardholder quote (1-2 sentences max), or the transaction citation (amount + recorded date) for a platform-recorded tip. Empty string when post_event_tip_detected is false.",
+  "post_event_tip_source": "one of: transactions | platform_message | customer_email | null. Null when post_event_tip_detected is false.",
   "multi_service_partial_delivery": "boolean. TRUE only when ONE payment covered MULTIPLE distinct services/dates, at least one service was delivered, and the cardholder cancelled the remaining services (see MULTI-SERVICE PARTIAL-DELIVERY ROUTING). False otherwise — NEVER fabricate.",
   "suggested_customer_email": {
     "subject": "short, specific subject line referencing the booking — empty string when not applicable",
@@ -1361,6 +1411,7 @@ export function buildUserMessage({
   fraudSignature,
   fxSignature,
   refundSignature,
+  tipSignature,
   searchStatus,
 }) {
   const amount = formatMoney(dispute.amount, dispute.currency);
@@ -1453,6 +1504,7 @@ export function buildUserMessage({
   const stolenCardSection = formatFraudSignature(fraudSignature);
   const fxDisputeSection = formatFxSignature(fxSignature);
   const refundHistorySection = formatRefundSignature(refundSignature);
+  const tipSection = formatTipSignature(tipSignature);
   const priorDisputesSection =
     Array.isArray(priorDisputes) && priorDisputes.length > 0
       ? priorDisputes
@@ -1526,7 +1578,35 @@ FX-DISPUTE SIGNAL (deterministic, computed from Stripe charge data):
 ${fxDisputeSection}
 
 REFUND HISTORY ON THIS CHARGE (deterministic, from Stripe):
-${refundHistorySection}`;
+${refundHistorySection}
+
+TIP / GRATUITY RECORD (deterministic, from booking transactions):
+${tipSection}`;
+}
+
+function formatTipSignature(sig) {
+  if (!sig) {
+    return '(Not computed — tip record was not fetched for this booking.)';
+  }
+  const lines = (sig.tips || []).map(
+    (tp) =>
+      `- ${tp.amount != null ? tp.amount.toFixed(2) : '?'} ${(tp.currency || '').toUpperCase()} | recorded: ${tp.created_iso || 'unknown'} | on/after event (${sig.event_date}): ${tp.on_or_after_event ? 'YES' : 'NO'}`
+  );
+  const out = [`Verdict: ${sig.verdict}`, ...(lines.length ? lines : ['- (no platform-recorded tips on this booking)']), ''];
+  if (sig.verdict === 'TIP_AFTER_EVENT') {
+    out.push(
+      'TIP_AFTER_EVENT — apply POST-EVENT TIP DETECTION & USE: this platform-recorded post-event tip is strong deemed-acceptance evidence on not-as-described codes (not proof and not a guarantee); set post_event_tip_detected: true with source \'transactions\' and make it a leading argument on those codes. If the disputed amount includes this tip, decompose it in the rebuttal.'
+    );
+  } else if (sig.verdict === 'TIP_RECORDED_PRE_EVENT') {
+    out.push(
+      'TIP_RECORDED_PRE_EVENT — the recorded tip PRE-DATES the event and proves nothing about delivery. Do NOT argue acceptance from it.'
+    );
+  } else {
+    out.push(
+      'NO_TIP_RECORDED — no platform-recorded tip. Tips are often paid off-platform: check PLATFORM MESSAGES and GMAIL CORRESPONDENCE for the cardholder confirming a tip in their OWN words (see POST-EVENT TIP DETECTION & USE).'
+    );
+  }
+  return out.join('\n');
 }
 
 function formatRefundSignature(sig) {
