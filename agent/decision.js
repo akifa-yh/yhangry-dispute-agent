@@ -271,6 +271,12 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
       ? `\n:warning: *Flags:*\n${analysis.flags.map((f) => `• ${f}`).join('\n')}`
       : '';
 
+  // Slack hard-rejects section blocks over 3000 chars (invalid_blocks), and a
+  // single oversized block fails the whole post. Guard for unbounded text.
+  function truncateForSlackSection(text, max = 2900) {
+    return text.length <= max ? text : `${text.slice(0, max)}\n_…truncated — full text in server logs._`;
+  }
+
   // ---- Build blocks ----
   const blocks = [];
 
@@ -354,6 +360,18 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     const overrideNote = analysis._overrode_recommendation
       ? ` _LLM initially recommended ${analysis._overrode_recommendation}; deterministic override applied._`
       : '';
+    // Refund-crossed-by-dispute add-on (source case: Lawrence Suen, 2026-07).
+    // Rendered ONLY when the deterministic refund signature actually fired —
+    // template-honesty: never assert a refund story that isn't in the data.
+    // A plain accept here can leave the customer permanently unpaid: they hold
+    // a refund receipt for money that never moved, and if they told their bank
+    // "I was already refunded" the bank may strip their provisional credit.
+    // Not appended to the stolen-card banner — that flow has no legitimate
+    // customer to email and the issuer makes the real cardholder whole.
+    const refundBlockedNote =
+      analysis._refund_signature?.verdict === 'REFUND_BLOCKED_BY_DISPUTE'
+        ? `\n:arrows_counterclockwise: *EXCEPTION to the accept-now instruction above — a refund already FAILED under this chargeback* (\`charge_for_pending_refund_disputed\`). The customer likely received Stripe's refund receipt email when it was issued (sent at creation, not settlement) and may believe they were refunded — no money actually moved, and a failed refund can never resume. Do NOT click Accept yet (watch the evidence deadline): (1) CS sends a corrective email now; (2) if the customer confirms IN WRITING that they asked their bank to withdraw the dispute, prefer *Counter dispute* → "The cardholder withdrew the dispute", attaching their written confirmation + the failed-refund record — which should return the funds when the issuer closes the dispute, so a fresh refund can then be paid directly. If the customer does not engage before the deadline, Accept stands. Exactly ONE payment ever: lost/accepted → the issuer keeps the funds for the customer (do NOT refund again); won → issue a NEW refund immediately and confirm it settles.`
+        : '';
     if (analysis.rebuttal_strategy === 'ACCEPT_MERCHANT_NONPERFORMANCE') {
       // Merchant non-performance (any chef-fault failure to deliver: fee
       // standoff, no-show, medical, unilateral date move). To the bank this is
@@ -368,7 +386,7 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:no_bell: *MERCHANT NON-PERFORMANCE — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute*; do NOT counter. The cardholder paid for a service our chef failed to deliver — to the issuing bank this is "services not received" regardless of the reason on our side, and internal policy language does not bind them. Countering loses the money anyway and hurts our lost-dispute ratio. Do NOT submit booking-terms/no-show exhibits or any internal chef↔yhangry threads. See *Reasoning* below for what happened in this specific case; any partial-cost recovery is a goodwill or chef-clawback conversation, not a formal counter.${overrideNote}`,
+          text: `:no_bell: *MERCHANT NON-PERFORMANCE — ACCEPT DISPUTE IN STRIPE.* Click *Accept dispute*; do NOT counter. The cardholder paid for a service our chef failed to deliver — to the issuing bank this is "services not received" regardless of the reason on our side, and internal policy language does not bind them. Countering loses the money anyway and hurts our lost-dispute ratio. Do NOT submit booking-terms/no-show exhibits or any internal chef↔yhangry threads. See *Reasoning* below for what happened in this specific case; any partial-cost recovery is a goodwill or chef-clawback conversation, not a formal counter.${overrideNote}${refundBlockedNote}`,
         },
       });
     } else if (analysis._fraud_signature?.verdict === 'STRONG_MATCH') {
@@ -399,7 +417,7 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:stop_sign: *ACCEPT RECOMMENDED — do NOT counter.* Click *Accept dispute* in the Stripe dashboard. See *Reasoning* below for the case-specific grounds; this banner intentionally states none, because the reason varies by case.${overrideNote}`,
+          text: `:stop_sign: *ACCEPT RECOMMENDED — do NOT counter.* Click *Accept dispute* in the Stripe dashboard. See *Reasoning* below for the case-specific grounds; this banner intentionally states none, because the reason varies by case.${overrideNote}${refundBlockedNote}`,
         },
       });
     }
@@ -653,7 +671,10 @@ export function formatSlackMessage(analysis, dispute, booking, options = {}) {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*Reasoning:*\n${analysis.reasoning || 'N/A'}${flagsBlock}`,
+      // Slack rejects section blocks over 3000 chars (invalid_blocks) and one
+      // oversized block fails the ENTIRE post. Reasoning is unbounded LLM text
+      // and deterministic flags stack on top — truncate defensively.
+      text: truncateForSlackSection(`*Reasoning:*\n${analysis.reasoning || 'N/A'}${flagsBlock}`),
     },
   });
 

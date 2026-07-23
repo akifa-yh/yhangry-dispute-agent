@@ -141,6 +141,88 @@ export async function getPaymentAuthForDispute(dispute) {
   }
 }
 
+/**
+ * Refund history for a dispute's charge — the refund-crossed-by-dispute
+ * signal (source case: Lawrence Suen, 2026-07). When a merchant refund is
+ * still PENDING at the moment a chargeback lands, Stripe fails the refund
+ * with failure_reason 'charge_for_pending_refund_disputed' — but Stripe
+ * already emailed the customer a refund receipt when the refund was CREATED,
+ * so the customer often sincerely believes they were refunded when no money
+ * ever moved. Downstream consumers: prompt guidance (REFUND-CROSSED-BY-DISPUTE
+ * RULES), the Slack ACCEPT banners, and the refund.failed webhook alert.
+ *
+ * Verdicts:
+ *   REFUND_BLOCKED_BY_DISPUTE — a refund failed with charge_for_pending_refund_disputed
+ *   REFUND_SETTLED            — a refund actually succeeded (double-credit guard)
+ *   REFUND_PENDING            — refund(s) exist, none settled or dispute-blocked
+ *   NO_REFUND                 — no refunds on the charge
+ * Non-fatal: returns null on any error or missing charge.
+ */
+export async function getRefundHistoryForDispute(dispute) {
+  try {
+    const chargeId = typeof dispute?.charge === 'string' ? dispute.charge : dispute?.charge?.id;
+    if (!chargeId) return null;
+    const { account } = await fetchChargeFromEitherAccount(chargeId);
+    const client = account === 'us' ? getStripeUs() : getStripeUk();
+    const res = await client.refunds.list({ charge: chargeId, limit: 20 });
+    const refunds = (res.data || []).map((r) => ({
+      id: r.id,
+      amount_cents: r.amount,
+      currency: r.currency,
+      status: r.status,
+      failure_reason: r.failure_reason || null,
+      receipt_number: r.receipt_number || null,
+      created_iso: r.created ? new Date(r.created * 1000).toISOString() : null,
+    }));
+    const blockedRefund =
+      refunds.find(
+        (r) => r.status === 'failed' && r.failure_reason === 'charge_for_pending_refund_disputed'
+      ) || null;
+    const settledRefund = refunds.find((r) => r.status === 'succeeded') || null;
+    // Chronology matters on multi-dispute charges (repeat-disputer pattern):
+    // dispute #1 crosses a refund (blocked) → we win → CS issues a NEW refund
+    // that settles → customer re-disputes the same charge. For dispute #2 the
+    // customer HAS been paid — a settled refund issued AFTER the blocked one
+    // must outrank REFUND_BLOCKED_BY_DISPUTE, or the playbook would instruct a
+    // double payment. ISO strings compare lexicographically.
+    let verdict = 'NO_REFUND';
+    if (
+      settledRefund &&
+      (!blockedRefund ||
+        String(settledRefund.created_iso || '') > String(blockedRefund.created_iso || ''))
+    ) {
+      verdict = 'REFUND_SETTLED';
+    } else if (blockedRefund) {
+      verdict = 'REFUND_BLOCKED_BY_DISPUTE';
+    } else if (refunds.length > 0) {
+      verdict = 'REFUND_PENDING';
+    }
+    return { verdict, refunds, blockedRefund, settledRefund, account };
+  } catch (err) {
+    console.warn(`[stripe] getRefundHistoryForDispute failed (non-fatal): ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * All disputes on a charge, newest first, from whichever account owns the
+ * charge. Used by the refund-failure webhook handler to route its alert into
+ * the right dispute's Slack thread. Non-fatal: returns { disputes: [] }.
+ */
+export async function listDisputesForCharge(chargeId) {
+  try {
+    if (!chargeId) return { disputes: [], account: null };
+    const { account } = await fetchChargeFromEitherAccount(chargeId);
+    const client = account === 'us' ? getStripeUs() : getStripeUk();
+    const res = await client.disputes.list({ charge: chargeId, limit: 10 });
+    const disputes = (res.data || []).sort((a, b) => (b.created || 0) - (a.created || 0));
+    return { disputes, account };
+  } catch (err) {
+    console.warn(`[stripe] listDisputesForCharge failed (non-fatal): ${err.message}`);
+    return { disputes: [], account: null };
+  }
+}
+
 // Fetch a dispute from whichever account owns it. Same dual-account pattern
 // as fetchChargeFromEitherAccount. Used by analyseDispute to rehydrate
 // dispute objects that arrive from button/modal payloads stripped down to

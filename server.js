@@ -959,6 +959,22 @@ app.post(
       handleDisputeClosed(dispute).catch((err) =>
         reportInvestigationError('webhook-closed', dispute, err)
       );
+    } else if (
+      event.type === 'refund.failed' ||
+      event.type === 'refund.updated' ||
+      event.type === 'charge.refund.updated'
+    ) {
+      // Refund-crossed-by-dispute alert (source case: Lawrence Suen, 2026-07).
+      // A refund that fails because a chargeback landed while it was pending
+      // means the customer holds a Stripe refund receipt for money that never
+      // moved — surface it in the dispute's thread before the customer tells
+      // their bank "I was already refunded". Requires the refund.* /
+      // charge.refund.updated event types to be enabled on the Stripe
+      // webhook endpoint config (both accounts).
+      const refund = event.data.object;
+      handleRefundFailed(refund).catch((err) =>
+        console.error(`[webhook-refund] Alert failed for ${refund?.id || 'unknown refund'}: ${err.message}`)
+      );
     } else {
       // Other event types reach here only if the Stripe webhook config
       // subscribes to them — ignore silently. Logged below for future debug
@@ -1029,6 +1045,117 @@ async function handleDisputeClosed(dispute) {
     `[webhook-closed] Posted outcome for ${dispute.id} — formal=${outcome.formalStatus}, ` +
       `net=${outcome.netDisplay} (${outcome.impliedOutcome}), disagrees=${outcome.statusDisagreesWithApi}`
   );
+
+  // Refund-crossed-by-dispute follow-up (source case: Lawrence Suen, 2026-07):
+  // when a refund on this charge previously failed under the chargeback, the
+  // right post-outcome move is easy to get wrong in both directions (double-
+  // paying the customer, or nobody paying them at all) — spell it out in the
+  // thread. Non-fatal: never blocks the outcome post above.
+  try {
+    const { getRefundHistoryForDispute } = await import('./integrations/stripe.js');
+    const refundHistory = await getRefundHistoryForDispute(dispute);
+    if (refundHistory?.verdict === 'REFUND_BLOCKED_BY_DISPUTE') {
+      const { postFollowUp, findDisputeReviewMessageTs, postError } = await import('./integrations/slack.js');
+      let text;
+      if (outcome.formalStatus === 'won') {
+        text = `:money_with_wings: *Action: issue a NEW refund now.* A refund on this charge previously FAILED under the chargeback (\`charge_for_pending_refund_disputed\`) — a failed refund can never resume. The dispute closed in our favour, so the funds are back: issue a fresh refund for the owed amount, confirm it actually settles this time, and email the customer confirmation the same day.`;
+      } else if (outcome.formalStatus === 'lost') {
+        text = `:no_entry: *Do NOT refund again.* A refund on this charge previously FAILED under the chargeback, and the dispute closed with the issuer keeping the funds — the issuer credits the cardholder. Confirm with the customer that the credit actually posted (they may believe our failed refund paid them — it did not). Watch Balance → Payouts for a late chargeback reversal (bank-side withdrawals can land weeks after closure); if funds ever return AND the issuer has not credited the customer, refund then. Exactly ONE payment ever.`;
+      } else {
+        text = `:grey_question: *Check who pays the customer.* A refund on this charge previously FAILED under the chargeback, and this dispute closed with status \`${outcome.formalStatus}\`. Verify the money picture in Balance → Payouts before any refund — refund ONLY if the funds actually returned to us AND the issuer has not credited the customer. Exactly ONE payment ever.`;
+      }
+      let threadTs = dispute?.metadata?.slack_message_ts || null;
+      if (!threadTs) {
+        const coords = await findDisputeReviewMessageTs(dispute.id).catch(() => null);
+        threadTs = coords?.messageTs || null;
+      }
+      if (threadTs) {
+        await postFollowUp(threadTs, text);
+      } else {
+        // This instruction is the only trigger for actually paying (or not
+        // double-paying) the customer — it must land somewhere visible.
+        await postError(
+          `REFUND FOLLOW-UP — no review thread found for dispute ${dispute.id}`,
+          { dispute_id: dispute.id, formal_status: outcome.formalStatus },
+          text
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[webhook-closed] Refund-history follow-up failed for ${dispute.id} (non-fatal): ${err.message}`
+    );
+  }
+}
+
+// Refund-failure alerts: when a refund fails because a chargeback crossed it
+// (failure_reason charge_for_pending_refund_disputed), the customer already
+// received Stripe's refund-receipt email at refund creation and may sincerely
+// believe they were refunded — no money moved, and a failed refund can never
+// resume. Alert the dispute's Slack thread immediately so CS corrects the
+// record BEFORE the customer tells their bank "I was already refunded" (which
+// can get their provisional credit stripped, leaving them unpaid — source
+// case: Lawrence Suen, 2026-07). Several event types can describe the same
+// refund (refund.failed / refund.updated / charge.refund.updated), so dedupe
+// on the refund id.
+const seenFailedRefundIds = new Map();
+const FAILED_REFUND_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function handleRefundFailed(refund) {
+  if (!refund || refund.object !== 'refund') return;
+  if (refund.status !== 'failed') return;
+  if (refund.failure_reason !== 'charge_for_pending_refund_disputed') return;
+
+  const now = Date.now();
+  for (const [id, t] of seenFailedRefundIds) {
+    if (now - t > FAILED_REFUND_TTL_MS) seenFailedRefundIds.delete(id);
+  }
+  if (seenFailedRefundIds.has(refund.id)) return;
+  // Mark seen up-front to stop concurrent sibling events double-posting, but
+  // un-mark on failure so refund.updated / charge.refund.updated can retry —
+  // Stripe won't redeliver (we already 200'd) and this alert must not be lost.
+  seenFailedRefundIds.set(refund.id, now);
+
+  try {
+    const chargeId = typeof refund.charge === 'string' ? refund.charge : refund.charge?.id;
+    const { listDisputesForCharge } = await import('./integrations/stripe.js');
+    const { postFollowUp, findDisputeReviewMessageTs, postError } = await import('./integrations/slack.js');
+
+    const { disputes } = await listDisputesForCharge(chargeId);
+    const dispute = disputes[0] || null;
+
+    const amount = `${((refund.amount ?? 0) / 100).toFixed(2)} ${(refund.currency || '').toUpperCase()}`;
+    const text =
+      `:rotating_light: *Refund FAILED under this dispute — the customer may falsely believe they were refunded.*\n` +
+      `Refund \`${refund.id}\` (${amount}${refund.receipt_number ? `, receipt #${refund.receipt_number}` : ''}) failed with ` +
+      `\`charge_for_pending_refund_disputed\` — the chargeback crossed it while it was pending. Stripe typically emails the ` +
+      `customer a refund receipt at creation (when receipt emails are enabled), so they may think they have been paid; no ` +
+      `money actually moved, and a failed refund can never resume.\n*Next steps:* (1) CS sends a corrective email now — the ` +
+      `refund was blocked by the dispute; a NEW refund follows once the dispute closes in our favour. (2) If the customer ` +
+      `confirms in writing that they asked their bank to withdraw, counter with "The cardholder withdrew the dispute" + that ` +
+      `confirmation + this failed-refund record, rather than plain-accepting. (3) Exactly ONE payment ever: lost/accepted → ` +
+      `the issuer keeps the funds for the customer (do NOT refund again); won → issue a NEW refund immediately.`;
+
+    let threadTs = dispute?.metadata?.slack_message_ts || null;
+    if (!threadTs && dispute) {
+      const coords = await findDisputeReviewMessageTs(dispute.id).catch(() => null);
+      threadTs = coords?.messageTs || null;
+    }
+    if (threadTs) {
+      await postFollowUp(threadTs, text);
+      console.log(`[webhook-refund] Posted refund-failure alert for ${refund.id} to thread ${threadTs}`);
+    } else {
+      await postError(
+        `REFUND FAILED UNDER DISPUTE — no review thread found for charge ${chargeId || 'unknown'}`,
+        { refund_id: refund.id, charge_id: chargeId || 'unknown', dispute_id: dispute?.id || 'unknown' },
+        text
+      );
+      console.log(`[webhook-refund] Posted refund-failure alert for ${refund.id} top-level (no thread found)`);
+    }
+  } catch (err) {
+    seenFailedRefundIds.delete(refund.id);
+    throw err;
+  }
 }
 
 // Health check

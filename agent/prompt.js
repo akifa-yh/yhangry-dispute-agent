@@ -575,6 +575,43 @@ already agreed to withdraw the dispute because we are refunding directly, the be
 path may be submitting their written withdrawal confirmation ("cardholder withdrew")
 rather than a plain accept — flag it rather than auto-accepting.
 
+REFUND-CROSSED-BY-DISPUTE RULES:
+The user message includes a REFUND HISTORY ON THIS CHARGE section (deterministic,
+from Stripe). When its verdict is REFUND_BLOCKED_BY_DISPUTE, a refund was issued
+and then FAILED because this chargeback locked the funds while the refund was
+still pending (failure_reason: charge_for_pending_refund_disputed). Facts that
+MUST shape the output whenever this fires:
+  (1) Stripe typically emails the customer a refund receipt when a refund is
+      CREATED (not when it settles), where receipt emails are enabled — so the
+      customer likely holds a receipt for money that
+      never moved and may sincerely believe they were refunded. If they tell
+      their bank "I was already refunded", the bank can remove their
+      provisional credit and leave them unpaid while the chargeback still
+      holds our funds.
+  (2) NEVER state or imply that the refund completed, and never promise it
+      will "process" or "settle" — a failed refund cannot resume. The only way
+      to pay the customer directly is a NEW refund after the dispute closes in
+      our favour.
+  (3) Whatever the strategy, add a flag that CS must send a corrective email:
+      the refund was blocked by the dispute; any refund receipt the customer
+      received was for the blocked refund; a new refund follows as soon as the
+      dispute releases the funds. When drafting suggested_customer_email,
+      include this correction in plain, non-technical language.
+  (4) On merchant-fault non-delivery (MERCHANT_DECLINED_TO_PERFORM) the
+      recommendation stays ACCEPT, but the reasoning MUST state the preferred
+      endgame: ask the customer to request withdrawal with their bank IN
+      WRITING, then counter with "cardholder withdrew" + their written
+      confirmation + the failed-refund record — which should return the funds
+      when the issuer closes the dispute, so the new refund can then be paid
+      directly, instead of relying on the issuer to re-credit a cardholder who
+      may have told them "I was already refunded".
+  (5) Exactly ONE payment ever: dispute lost/accepted → the issuer keeps the
+      funds for the customer, do NOT refund again; dispute won → issue the new
+      refund immediately and confirm it settles.
+When the verdict is REFUND_SETTLED, a refund actually reached the customer —
+weigh the double-credit risk (dispute amount on top of a settled refund) and
+consider a "credit issued" response; state the settled refund in the evidence.
+
 DISPUTE TYPE ROUTING:
 - 13.3 / product_unacceptable: proof of service description match, chef's account of delivery, substitutions
 - 13.1 / product_not_received: proof of chef attendance, day-of messages
@@ -1323,6 +1360,7 @@ export function buildUserMessage({
   chefMessages,
   fraudSignature,
   fxSignature,
+  refundSignature,
   searchStatus,
 }) {
   const amount = formatMoney(dispute.amount, dispute.currency);
@@ -1414,6 +1452,7 @@ export function buildUserMessage({
   const playbookSection = formatRequirements(matrixEntry);
   const stolenCardSection = formatFraudSignature(fraudSignature);
   const fxDisputeSection = formatFxSignature(fxSignature);
+  const refundHistorySection = formatRefundSignature(refundSignature);
   const priorDisputesSection =
     Array.isArray(priorDisputes) && priorDisputes.length > 0
       ? priorDisputes
@@ -1484,7 +1523,37 @@ STOLEN-CARD SIGNAL (deterministic, computed from Stripe charge data):
 ${stolenCardSection}
 
 FX-DISPUTE SIGNAL (deterministic, computed from Stripe charge data):
-${fxDisputeSection}`;
+${fxDisputeSection}
+
+REFUND HISTORY ON THIS CHARGE (deterministic, from Stripe):
+${refundHistorySection}`;
+}
+
+function formatRefundSignature(sig) {
+  if (!sig) {
+    return '(Not computed — refund history was not fetched for this dispute.)';
+  }
+  const money = (r) => `${((r.amount_cents ?? 0) / 100).toFixed(2)} ${(r.currency || '').toUpperCase()}`;
+  const lines = (sig.refunds || []).map(
+    (r) =>
+      `- ${r.id} | ${money(r)} | status: ${r.status}` +
+      (r.failure_reason ? ` | failure_reason: ${r.failure_reason}` : '') +
+      (r.receipt_number ? ` | receipt #${r.receipt_number}` : '') +
+      ` | created: ${r.created_iso || 'unknown'}`
+  );
+  const out = [`Verdict: ${sig.verdict}`, ...(lines.length ? lines : ['- (no refunds on this charge)']), ''];
+  if (sig.verdict === 'REFUND_BLOCKED_BY_DISPUTE') {
+    out.push(
+      'REFUND_BLOCKED_BY_DISPUTE — apply the REFUND-CROSSED-BY-DISPUTE RULES: the customer received a refund receipt for money that never moved; require a corrective email; prefer a written-withdrawal representment over a plain accept where the customer cooperates; never state the refund "completed" or promise it will "process" — a failed refund cannot resume, only a NEW refund after a favourable close can pay the customer.'
+    );
+  } else if (sig.verdict === 'REFUND_SETTLED') {
+    out.push(
+      'REFUND_SETTLED — a refund actually reached the customer. Weigh the double-credit risk (dispute amount on top of a settled refund) per the REFUND-CROSSED-BY-DISPUTE RULES.'
+    );
+  } else {
+    out.push('No dispute-blocked or settled refunds — proceed with normal logic.');
+  }
+  return out.join('\n');
 }
 
 function formatFxSignature(sig) {

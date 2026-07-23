@@ -81,4 +81,23 @@ try {
   check('unknown strategy -> explicit no-canned-answer path', out.includes('no canned answer exists'));
 } catch (e) { failures++; print('FAIL unknown strategy renders — ' + e); }
 
+try {
+  const nonperfBase = {
+    recommendation: 'ACCEPT', rebuttal_strategy: 'ACCEPT_MERCHANT_NONPERFORMANCE',
+    chef_attendance_assessment: 'MERCHANT_DECLINED_TO_PERFORM', evidence_strength: 'N/A',
+    _fraud_signature: { verdict: 'NO_MATCH', signals: {} },
+  };
+  const withSig = render({
+    ...nonperfBase,
+    _refund_signature: { verdict: 'REFUND_BLOCKED_BY_DISPUTE', refunds: [], blockedRefund: { id: 're_fixture' } },
+  });
+  const withoutSig = render(nonperfBase);
+  check('refund-blocked accept -> failed-refund note fires', withSig.includes('refund already FAILED'));
+  check('refund-blocked accept -> explicitly overrides accept-now', withSig.includes('EXCEPTION to the accept-now'));
+  check('refund-blocked accept -> written-withdrawal path offered', withSig.includes('cardholder withdrew'));
+  check('refund-blocked accept -> one-payment rule stated', withSig.includes('ONE payment'));
+  check('refund-blocked accept -> never claims refund settled', !withSig.includes('refund has been issued') && !withSig.includes('refund completed'));
+  check('plain accept -> no refund story fabricated', !withoutSig.includes('refund already FAILED'));
+} catch (e) { failures++; print('FAIL refund-blocked accept renders — ' + e); }
+
 print(failures ? `${failures} golden failure(s)` : 'goldens-jsc: ALL OK');

@@ -50,6 +50,21 @@ check('C02 carries no exemplar voucher code', !matrix.includes('KHU50AGG'));
 check('12.5 admission source has no canonical customer quote', !matrix.includes('I will cancel the dispute with my card'));
 check('exhibit analyser accepts legitimate post-event dates', analyser.includes('do not "correct" them toward the event date'));
 
+// Refund-crossed-by-dispute training (2026-07-24, source case: Lawrence Suen)
+const server = readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+const stripeIntegration = readFileSync(path.join(ROOT, 'integrations/stripe.js'), 'utf8');
+check('refund-blocked banner note is signature-gated', decision.includes("_refund_signature?.verdict === 'REFUND_BLOCKED_BY_DISPUTE'"));
+check('prompt carries refund-crossed rules', prompt.includes('REFUND-CROSSED-BY-DISPUTE RULES'));
+check('prompt never lets a failed refund "resume"', prompt.includes('a failed refund cannot resume'));
+check('refund history verdict computed from failure_reason', stripeIntegration.includes("r.failure_reason === 'charge_for_pending_refund_disputed'"));
+check('refund.failed webhook branch exists', server.includes("event.type === 'refund.failed'"));
+check('refund alert gated on the dispute-crossed failure reason', server.includes("refund.failure_reason !== 'charge_for_pending_refund_disputed'"));
+check('closed-dispute follow-up: won → NEW refund', server.includes('issue a NEW refund now'));
+check('closed-dispute follow-up: lost → no double pay', server.includes('Do NOT refund again'));
+check('review-thread ts destructured from coords, not passed raw', server.includes('coords?.messageTs'));
+check('settled-after-block outranks blocked verdict', stripeIntegration.includes("verdict = 'REFUND_SETTLED';"));
+check('reasoning+flags block is length-guarded', decision.includes('truncateForSlackSection'));
+
 // ---------------------------------------------------------------------------
 // 2. Behavioural goldens
 // ---------------------------------------------------------------------------
@@ -129,6 +144,28 @@ try {
   });
   check('unknown strategy → explicit no-canned-answer path', out.includes('no canned answer exists'));
 } catch (e) { check('unknown strategy renders', false, e.message); }
+
+// Refund-crossed-by-dispute: the note fires ONLY when the deterministic
+// signature fired (never fabricate a refund story), and when it fires it must
+// carry the corrective-email + written-withdrawal guidance.
+try {
+  const nonperfBase = {
+    recommendation: 'ACCEPT', rebuttal_strategy: 'ACCEPT_MERCHANT_NONPERFORMANCE',
+    chef_attendance_assessment: 'MERCHANT_DECLINED_TO_PERFORM', evidence_strength: 'N/A',
+    _fraud_signature: { verdict: 'NO_MATCH', signals: {} },
+  };
+  const withSig = render({
+    ...nonperfBase,
+    _refund_signature: { verdict: 'REFUND_BLOCKED_BY_DISPUTE', refunds: [], blockedRefund: { id: 're_fixture' } },
+  });
+  const withoutSig = render(nonperfBase);
+  check('refund-blocked accept → failed-refund note fires', withSig.includes('refund already FAILED'));
+  check('refund-blocked accept → explicitly overrides accept-now', withSig.includes('EXCEPTION to the accept-now'));
+  check('refund-blocked accept → written-withdrawal path offered', withSig.includes('cardholder withdrew'));
+  check('refund-blocked accept → one-payment rule stated', withSig.includes('ONE payment'));
+  check('refund-blocked accept → never claims refund settled', !withSig.includes('refund has been issued') && !withSig.includes('refund completed'));
+  check('plain accept → no refund story fabricated', !withoutSig.includes('refund already FAILED'));
+} catch (e) { check('refund-blocked accept renders', false, e.message); }
 
 console.log('');
 if (failures) {

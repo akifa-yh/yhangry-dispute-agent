@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { DateTime } from 'luxon';
 import * as bigquery from '../integrations/bigquery.js';
-import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount, getPaymentAuthForDispute, getPriorDisputesForPayment } from '../integrations/stripe.js';
+import { fetchChargeFromEitherAccount, fetchDisputeFromEitherAccount, getPaymentAuthForDispute, getPriorDisputesForPayment, getRefundHistoryForDispute } from '../integrations/stripe.js';
 import * as aircall from '../integrations/aircall.js';
 import * as bird from '../integrations/bird.js';
 import * as conduit from '../integrations/conduit.js';
@@ -395,6 +395,28 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     console.error('[agent] Prior-dispute lookup failed (non-fatal):', err.message);
   }
 
+  // Step 5g: Refund history on the disputed charge (source case: Lawrence
+  // Suen, 2026-07). A refund that is still PENDING when the chargeback lands
+  // fails with charge_for_pending_refund_disputed — but Stripe emailed the
+  // customer a refund receipt when the refund was created, so the customer
+  // often believes they were refunded when no money ever moved. If they then
+  // tell their bank "I was already refunded", the bank can strip their
+  // provisional credit and leave them unpaid while the chargeback still holds
+  // our funds. The prompt + Slack banner turn this signal into: corrective
+  // email + prefer a written-withdrawal representment over a plain accept.
+  // Non-fatal → null.
+  let refundSignature = null;
+  try {
+    refundSignature = await getRefundHistoryForDispute(dispute);
+    if (refundSignature) {
+      console.log(
+        `[agent] Refund history: verdict=${refundSignature.verdict} (${refundSignature.refunds.length} refund(s) on charge)`
+      );
+    }
+  } catch (err) {
+    console.error('[agent] Refund history lookup failed (non-fatal):', err.message);
+  }
+
   // Step 6: Normalise event_date on booking for downstream display, then run Gemini
   booking.event_date = eventDateStr;
   if (narrative) {
@@ -418,6 +440,7 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
     chefMessages,
     fraudSignature,
     fxSignature,
+    refundSignature,
     searchStatus,
   });
 
@@ -545,6 +568,20 @@ export async function analyseDispute(dispute, { narrative = null } = {}) {
 
   if (fxSignature) {
     analysis._fx_signature = fxSignature;
+  }
+
+  // Stash refund history for decision.js (banner add-on) and add a
+  // deterministic ops flag when a refund was crossed by a chargeback —
+  // the LLM is also told (REFUND-CROSSED-BY-DISPUTE RULES) but the flag
+  // must not depend on the model noticing. Assigned UNCONDITIONALLY so a
+  // model-forged `_refund_signature` key in the parsed JSON can never
+  // survive (runAgent output has no schema whitelist); null overwrites.
+  analysis._refund_signature = refundSignature || null;
+  if (refundSignature?.verdict === 'REFUND_BLOCKED_BY_DISPUTE') {
+    analysis.flags = [
+      ...(analysis.flags || []),
+      'A refund on this charge FAILED because a chargeback crossed it while pending (charge_for_pending_refund_disputed) — the customer may hold a Stripe refund receipt for money that never moved and believe they were refunded. Failed refunds never resume. Follow the banner playbook: corrective email now; written-withdrawal representment preferred over plain accept; exactly ONE payment ever.',
+    ];
   }
 
   // Step 7: Product gap tracking — record any tags Gemini emitted, then check
